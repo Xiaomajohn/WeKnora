@@ -238,6 +238,10 @@ services:
       dockerfile: docker/Dockerfile.docreader
       args:
         - APT_MIRROR=${APT_MIRROR:-}
+        - HTTP_PROXY=${HTTP_PROXY:-}
+        - HTTPS_PROXY=${HTTPS_PROXY:-}
+        - http_proxy=${http_proxy:-}
+        - https_proxy=${https_proxy:-}
     container_name: WeKnora-docreader
     # docreader gRPC ships without auth/TLS and is only consumed by the app
     # container over the WeKnora-network (DOCREADER_ADDR defaults to
@@ -287,6 +291,11 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.odl-hybrid
+      args:
+        - HTTP_PROXY=${HTTP_PROXY:-}
+        - HTTPS_PROXY=${HTTPS_PROXY:-}
+        - http_proxy=${http_proxy:-}
+        - https_proxy=${https_proxy:-}
     image: weknora-odl-hybrid:local
     container_name: WeKnora-odl-hybrid
     profiles:
@@ -780,6 +789,11 @@ services:
   mcp:
     build:
       context: ./mcp-server
+      args:
+        - HTTP_PROXY=${HTTP_PROXY:-}
+        - HTTPS_PROXY=${HTTPS_PROXY:-}
+        - http_proxy=${http_proxy:-}
+        - https_proxy=${https_proxy:-}
     container_name: WeKnora-mcp
     ports:
       - "${MCP_PORT:-8082}:8000"

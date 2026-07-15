@@ -1,17 +1,17 @@
 FROM python:3.11-slim
 
-# 支持代理构建
+# 从构建参数接收代理设置
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
-ARG http_proxy
-ARG https_proxy
+ARG NO_PROXY
+ARG no_proxy
 
-# 设置 pip 代理环境变量
+# 传递给容器内程序
 ENV HTTP_PROXY=${HTTP_PROXY}
 ENV HTTPS_PROXY=${HTTPS_PROXY}
-ENV http_proxy=${http_proxy}
-ENV https_proxy=${https_proxy}
-ENV PIP_NO_CACHE_DIR=1
+ENV NO_PROXY=${NO_PROXY}
+ENV no_proxy=${no_proxy}
+ENV PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 
 WORKDIR /app
 COPY requirements.txt .
