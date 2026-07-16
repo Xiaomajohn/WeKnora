@@ -383,13 +383,11 @@ router.beforeEach(async (to, from, next) => {
     return
   }
 
-  // member 角色（level=5）没有 KB/Agent/Settings 的数据权限，后端 list 接口
-  // 都走 g.Viewer() 拦截。侧栏入口已通过 menu.ts visibleMenuArr 拿掉，
-  // 但浏览器手输 URL / 书签 / 外部链接仍可能跳进这些页面。这里在路由层
-  // 统一重定向到 member 唯一可见的 creatChat 入口，避免页面闪现。
-  // 跳转目标从 /platform/knowledge-bases 改为 /platform/creatChat，
-  // 因为 KB 入口本身对 member 也是被禁的，原跳转会让 member 进入新禁路径
-  // 并触发 403。/platform/system/* 走 requiresSystemAdmin 也已经会拦截，
+  // member 角色（level=5）仅看到侧栏四个入口（对话 / 知识库 / 智能体 / 共享空间），
+  // 任何设置类入口都不开放——这里拦截的是 /platform/settings、/platform/integrations
+  // 以及 /platform/system/* 的 URL 直链。如果不拦住，member 在浏览器里手输 URL 仍然
+  // 能跳进设置弹窗（Settings.vue canSeeSection 会让所有 section 进入 role-denied，
+  // 但页面本身还是会闪现）。/platform/system/* 走 requiresSystemAdmin 也已经会拦截，
   // 这里加个显式判断是为了让路由层与会话层逻辑一致。
   // level=5 < 原 4 角色，对它们这条规则永远是 false，等价于 0 影响。
   if (authStore.currentTenantRole === 'member') {
@@ -397,13 +395,10 @@ router.beforeEach(async (to, from, next) => {
     if (
       path === '/platform/settings' ||
       path === '/platform/integrations' ||
-      path.startsWith('/platform/system') ||
-      path === '/platform/knowledge-bases' ||
-      path.startsWith('/platform/knowledge-bases/') ||
-      path === '/platform/agents' ||
-      path.startsWith('/platform/agents/')
+      path === '/platform/system' ||
+      path.startsWith('/platform/system/')
     ) {
-      next('/platform/creatChat')
+      next('/platform/knowledge-bases')
       return
     }
   }

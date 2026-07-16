@@ -36,13 +36,6 @@ type AuthHandler struct {
 	// fixtures — the share-link endpoints respond 503 rather than
 	// blocking the rest of the auth surface.
 	invitationSvc interfaces.TenantInvitationService
-	// memberService powers the "email is already an active Member of some
-	// workspace" detection in Register. When the registrant already holds a
-	// TenantRoleMember row in any tenant we drop their provisioning from
-	// create_personal to tenantless so the system does NOT silently spin up
-	// a parallel personal workspace for them — only admins can decide which
-	// workspaces a Member belongs to.
-	memberService interfaces.TenantMemberService
 }
 
 // NewAuthHandler creates a new auth handler instance with the provided services
@@ -55,18 +48,12 @@ type AuthHandler struct {
 //     (which already accounted for the legacy DISABLE_REGISTRATION env coerce
 //     during config load). Mismatch impossible by construction since the
 //     handler always passes cfg's value as the def parameter to GetString.
-//   - memberService: used by Register to detect "email already a Member" so
-//     Member users do not get a self-service personal workspace bolted on top
-//     of their admin-granted membership. When nil (e.g. legacy test fixtures)
-//     the Register flow falls back to the configured DefaultTenantMode.
-//     Production wires it through container.go.
 //
 // Returns a pointer to the newly created AuthHandler
 func NewAuthHandler(configInfo *config.Config,
 	userService interfaces.UserService, tenantService interfaces.TenantService,
 	systemSettingSvc interfaces.SystemSettingService,
 	invitationSvc interfaces.TenantInvitationService,
-	memberService interfaces.TenantMemberService,
 ) *AuthHandler {
 	// Boot-time guard: a nil-or-empty Auth section silently disables the
 	// invite_only gate (see Register below). Emit a loud one-shot log
@@ -84,7 +71,6 @@ func NewAuthHandler(configInfo *config.Config,
 		tenantService:    tenantService,
 		systemSettingSvc: systemSettingSvc,
 		invitationSvc:    invitationSvc,
-		memberService:    memberService,
 	}
 }
 
@@ -113,32 +99,6 @@ func (h *AuthHandler) resolveRegistrationMode(ctx context.Context) string {
 	// layer would mean a UI delete (DB row absent) silently flipped to
 	// the legacy boolean read again, which is surprising.
 	return h.systemSettingSvc.GetString(ctx, "auth.registration_mode", "", def)
-}
-
-// userHasAnyMemberRole reports whether the user has an active
-// TenantRoleMember row in ANY tenant. Used by GetCurrentUser to suppress
-// the can_create_tenant capability for Member users so the frontend
-// matches the server-side A1+A3 authoritative answers. We accept the
-// TenantMemberService as a parameter so the helper stays trivially
-// mockable from tests that construct AuthHandler without a real service.
-//
-// Returns (false, nil) on lookup error so callers can fail-open with a
-// warning log (a transient DB hiccup should not blank the capability for
-// every user).
-func userHasAnyMemberRole(ctx context.Context, svc interfaces.TenantMemberService, userID string) (bool, error) {
-	if svc == nil {
-		return false, nil
-	}
-	memberships, err := svc.ListByUser(ctx, userID)
-	if err != nil {
-		return false, err
-	}
-	for _, m := range memberships {
-		if m != nil && m.Role == types.TenantRoleMember {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // resolveDefaultTenantMode returns the provisioning policy for ordinary
@@ -216,41 +176,6 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	req.Username = secutils.SanitizeForLog(req.Username)
 	req.Email = secutils.SanitizeForLog(req.Email)
 	req.TenantProvisioning = h.resolveDefaultTenantMode(ctx)
-	// Member-aware provisioning downgrade: if the registrant already exists
-	// in the user table (e.g. an admin pre-invited them and they later
-	// complete registration) and currently holds an active TenantRoleMember
-	// row in any tenant, we drop create_personal -> tenantless so the system
-	// does NOT silently spin up a parallel personal workspace for them.
-	// Membership scope is "any tenant" because Member can only read shared
-	// resources; the admin who controls their workspace should be the one
-	// to bring them into additional tenants, not a self-service personal
-	// tenant bolted on by the registration flow.
-	//
-	// Fail-open: if memberService or user lookup is unavailable we fall
-	// back to the configured DefaultTenantMode. Better to over-provision a
-	// tenant than to drop a legitimate new account on a transient lookup
-	// error.
-	if req.TenantProvisioning == types.TenantProvisioningCreatePersonal &&
-		h.memberService != nil && h.userService != nil && strings.TrimSpace(req.Email) != "" {
-		existing, lookupErr := h.userService.GetUserByEmail(ctx, req.Email)
-		if lookupErr == nil && existing != nil && existing.ID != "" {
-			if memberships, listErr := h.memberService.ListByUser(ctx, existing.ID); listErr == nil {
-				for _, m := range memberships {
-					if m != nil && m.Role == types.TenantRoleMember {
-						logger.Infof(ctx,
-							"Downgrading registration provisioning to tenantless: email=%s already a Member in tenant %d",
-							secutils.SanitizeForLog(req.Email), m.TenantID)
-						req.TenantProvisioning = types.TenantProvisioningTenantless
-						break
-					}
-				}
-			} else {
-				logger.Warnf(ctx,
-					"Member-aware provisioning lookup failed for email=%s: %v — falling back to configured DefaultTenantMode",
-					secutils.SanitizeForLog(req.Email), listErr)
-			}
-		}
-	}
 	// Call service to register user
 	user, err := h.userService.Register(ctx, &req)
 	if err != nil {
@@ -625,7 +550,7 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 	if activeTenantID == 0 {
 		activeTenantID = user.TenantID
 	}
-	if activeTenantID > 0 && h.tenantService != nil {
+	if activeTenantID > 0 {
 		tenant, err = h.tenantService.GetTenantByID(ctx, activeTenantID)
 		if err != nil {
 			logger.Warnf(ctx, "Failed to get tenant info for user %s, tenant ID %d: %v", user.Email, activeTenantID, err)
@@ -637,25 +562,8 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 	// 同步返回当前用户的 memberships，让前端在页面刷新（仅命中 /auth/me）
 	// 后也能恢复 currentTenantRole，避免角色信息只在 login 那一刻可用。
 	memberships := h.userService.BuildLoginMemberships(ctx, user, tenant)
-	// can_create_tenant projection. Member users (level=5) should never see
-	// the self-service create UI regardless of the deployment's
-	// self_service_creation_enabled flag: a Member's workspace membership
-	// is provisioned by an admin, and a parallel personal workspace would
-	// be a footgun for the admin's tenant. We look across all of the
-	// user's memberships (any tenant) — same scope as A2/A3 — so the UI
-	// gate matches the server's authoritative answer.
 	canCreateTenant := user.CanAccessAllTenants ||
 		resolveTenantSelfServiceCreationEnabled(ctx, h.configInfo, h.systemSettingSvc)
-	if canCreateTenant && !user.CanAccessAllTenants && h.memberService != nil {
-		holdsMember, memberErr := userHasAnyMemberRole(ctx, h.memberService, user.ID)
-		if memberErr != nil {
-			logger.Warnf(ctx,
-				"Member-aware can_create_tenant lookup failed for user %s: %v — falling back to policy flag",
-				user.ID, memberErr)
-		} else if holdsMember {
-			canCreateTenant = false
-		}
-	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{

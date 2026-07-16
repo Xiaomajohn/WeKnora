@@ -589,13 +589,16 @@ func RegisterChatRoutes(r *gin.RouterGroup, handler *session.Handler, g *rbacGua
 // tenant_member.go; collapsing it into one route guard means the
 // declaration itself documents the rule.
 //
-// POST /tenants stays under g.Viewer() (added for the new Member role):
-// TenantRoleMember.Level()=5 is intentionally BELOW TenantRoleViewer.Level()=10
-// so the numeric comparison inside RequireRole rejects Member with 403, while
-// every legacy role (viewer/contributor/admin/owner) keeps passing unchanged.
-// TenantHandler.CreateTenant still enforces the legacy self_service_creation_enabled
-// policy for non-superusers and the A3 handler-level member check as a defence
-// in depth for the EnableRBAC=false rollout window.
+// Cross-tenant superuser endpoints (/tenants/all, /tenants/search) use
+// g.CrossTenant(): RequireCrossTenantAccess in access.go combines the
+// CanAccessAllTenants user attribute with the cluster-wide
+// EnableCrossTenantAccess flag, replacing the 12-line if-block that
+// previously opened ListAllTenants and SearchTenants.
+//
+// POST /tenants and GET /tenants stay open to authenticated users —
+// the previous handler comments claimed CanAccessAllTenants gating
+// "is in the handler" but the bodies never enforced it; this PR is a
+// pure refactor and does not introduce new gates.
 func RegisterTenantRoutes(
 	r *gin.RouterGroup,
 	handler *handler.TenantHandler,
@@ -604,17 +607,23 @@ func RegisterTenantRoutes(
 	auditLogHandler *handler.AuditLogHandler,
 	g *rbacGuards,
 ) {
+	// Cross-tenant superuser endpoints — promoted from handler if-blocks
+	// to middleware.RequireCrossTenantAccess at the route layer.
 	r.GET("/tenants/all", g.CrossTenant(), handler.ListAllTenants)
 	r.GET("/tenants/search", g.CrossTenant(), handler.SearchTenants)
 
-// 空间路由组
-tenantRoutes := r.Group("/tenants")
-{
-	// 创建空间现在收口到 g.Viewer()：见上面 RegisterTenantRoutes godoc 注释。
-	// Member 角色被数值比较拒绝；handler 内的 self_service_creation_enabled
-	// 检查继续对非跨租户超管的合法角色生效。
-	// 创建空间不对 API key 开放（注册在原始 group，默认拒绝）。
-	tenantRoutes.POST("", g.Viewer(), handler.CreateTenant)
+	// 空间路由组
+	tenantRoutes := r.Group("/tenants")
+	{
+		// 创建空间对所有已登录用户开放：用户可以为自己再开一个工作区，
+		// handler 内部会调 EnsureOwner 把调用者写成新空间的 Owner。
+		// 跨空间超管走同一个端点，但能携带 storage_quota / status 等
+		// 全字段（见 handler.CreateTenant 内部分支）。
+		// 安全说明：这里不挂 g.CrossTenant()，因为 self-service 创建
+		// 不需要跨空间特权；handler 也不读写 X-Tenant-ID 指向的现有
+		// 空间，所以越过 PathTenantMatch 守卫不会扩大攻击面。
+		// 创建空间不对 API key 开放（注册在原始 group，默认拒绝）。
+		tenantRoutes.POST("", handler.CreateTenant)
 		g.apiKeyRoute(tenantRoutes, http.MethodGet, "", apiKeyManageTenantSettings(apiKeyFullAccess()), handler.ListTenants)
 
 		// Generic KV configuration management (tenant-level). Tenant ID
