@@ -778,7 +778,13 @@ func NewSSRFSafeHTTPClient(config SSRFSafeHTTPClientConfig) *http.Client {
 	transport := &http.Transport{
 		DisableKeepAlives:  config.DisableKeepAlives,
 		DisableCompression: config.DisableCompression,
-		// Dial with SSRF protection - validates resolved IPs before connecting
+		// Honor HTTP_PROXY / HTTPS_PROXY / NO_PROXY so outbound calls can
+		// egress through an upstream proxy. DialContext below (via
+		// SSRFSafeDialContext) whitelists the proxy host itself via
+		// IsSystemProxy, so connecting to the proxy bypasses the SSRF DNS
+		// checks; target host SSRF protection is still applied at redirect
+		// time and via ValidateURLForSSRF callers.
+		Proxy:       http.ProxyFromEnvironment,
 		DialContext: SSRFSafeDialContext,
 	}
 
