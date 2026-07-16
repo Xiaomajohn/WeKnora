@@ -257,6 +257,13 @@ func newEmbedder(config Config, pooler EmbedderPooler, ollamaService *ollama.Oll
 			}
 			embedder, err = zhipuEmb, zErr
 			return embedder, err
+		case provider.ProviderMiniMax:
+			mmEmb, mErr := NewMiniMaxEmbedder(config, pooler)
+			if mmEmb != nil {
+				mmEmb.SetCustomHeaders(config.CustomHeaders)
+			}
+			embedder, err = mmEmb, mErr
+			return embedder, err
 		case provider.ProviderWeKnoraCloud:
 			embedder, err = NewWeKnoraCloudEmbedder(config)
 			return embedder, err

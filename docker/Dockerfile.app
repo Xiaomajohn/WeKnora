@@ -8,7 +8,17 @@ ARG GOPRIVATE_ARG
 ARG GOPROXY_ARG
 ARG GOSUMDB_ARG=off
 ARG APK_MIRROR_ARG
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
 
+# 关键：把 ARG 写进 ENV，所有后续 RUN 才能继承
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    no_proxy=${NO_PROXY}
 # 设置Go环境变量
 ENV GOPRIVATE=${GOPRIVATE_ARG}
 ENV GOPROXY=${GOPROXY_ARG}
@@ -16,7 +26,7 @@ ENV GOSUMDB=${GOSUMDB_ARG}
 
 # Install dependencies
 RUN if [ -n "$APK_MIRROR_ARG" ]; then \
-        sed -i "s@deb.debian.org@${APK_MIRROR_ARG}@g" /etc/apt/sources.list.d/debian.sources; \
+        sed -i "s@http://deb.debian.org@https://${APK_MIRROR_ARG}@g" /etc/apt/sources.list.d/debian.sources; \
     fi && \
     apt-get update && \
     apt-get install -y git build-essential libsqlite3-dev
@@ -28,6 +38,21 @@ RUN go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY cmd/download cmd/download
+# Pre-download DuckDB extensions via proxy (DuckDB 1.5.2 INSTALL doesn't read HTTP_PROXY,
+# so curl must fetch them ahead of `go run` and place them where INSTALL/LOAD will find them).
+# The path <duckdb_version>/<platform>/ matches what duckdb-go's INSTALL uses internally.
+RUN mkdir -p /root/.duckdb/extensions/v1.5.2/linux_amd64 && \
+    cd /root/.duckdb/extensions/v1.5.2/linux_amd64 && \
+    for ext in spatial excel; do \
+        if [ ! -f "${ext}.duckdb_extension" ]; then \
+            command -v curl >/dev/null 2>&1 || apt-get install -y --no-install-recommends curl; \
+            curl -fsSL \
+                 --proxy "${HTTPS_PROXY:-${HTTP_PROXY}}" \
+                 -o "${ext}.duckdb_extension.gz" \
+                 "https://extensions.duckdb.org/v1.5.2/linux_amd64/${ext}.duckdb_extension.gz" \
+            && gunzip -f "${ext}.duckdb_extension.gz"; \
+        fi; \
+    done
 RUN go run cmd/download/duckdb/duckdb.go
 COPY . .
 
@@ -64,7 +89,7 @@ RUN apt-get update && \
 
 # Then switch to mirror if specified and install other packages
 RUN if [ -n "$APK_MIRROR_ARG" ]; then \
-        sed -i "s@deb.debian.org@${APK_MIRROR_ARG}@g" /etc/apt/sources.list.d/debian.sources; \
+        sed -i "s@http://deb.debian.org@https://${APK_MIRROR_ARG}@g" /etc/apt/sources.list.d/debian.sources; \
     fi && \
     apt-get update && \
     apt-get install -y --no-install-recommends \

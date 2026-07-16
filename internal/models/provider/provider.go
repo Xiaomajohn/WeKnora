@@ -247,7 +247,7 @@ func DetectProvider(baseURL string) ProviderName {
 		return ProviderVolcengine
 	case containsAny(baseURL, "hunyuan.cloud.tencent.com"):
 		return ProviderHunyuan
-	case containsAny(baseURL, "minimax.io", "minimaxi.com"):
+	case containsAny(baseURL, "minimax.io", "minimaxi.com", "minimax.chat"):
 		return ProviderMiniMax
 	case containsAny(baseURL, "xiaomimimo.com"):
 		return ProviderMimo

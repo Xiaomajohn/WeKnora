@@ -11,6 +11,11 @@ const (
 	MiniMaxBaseURL = "https://api.minimax.io/v1"
 	// MiniMaxCNBaseURL MiniMax 国内版 API BaseURL
 	MiniMaxCNBaseURL = "https://api.minimaxi.com/v1"
+	// MiniMaxIntlEmbeddingBaseURL MiniMax 国际版 embedding 服务 BaseURL
+	// （这是根据该服务当前真实接入点确定的 — 见 internal/models/embedding/minimax.go）。
+	// 官方 curl 形态：
+	//   POST https://api.minimax.chat/v1/embeddings?GroupId=<可选>
+	MiniMaxIntlEmbeddingBaseURL = "https://api.minimax.chat/v1"
 )
 
 // MiniMaxProvider 实现 MiniMax 的 Provider 接口
@@ -28,9 +33,11 @@ func (p *MiniMaxProvider) Info() ProviderInfo {
 		Description: "MiniMax-M3, MiniMax-M2.7, MiniMax-M2.7-highspeed, etc.",
 		DefaultURLs: map[types.ModelType]string{
 			types.ModelTypeKnowledgeQA: MiniMaxCNBaseURL,
+			types.ModelTypeEmbedding:   MiniMaxIntlEmbeddingBaseURL,
 		},
 		ModelTypes: []types.ModelType{
 			types.ModelTypeKnowledgeQA,
+			types.ModelTypeEmbedding,
 		},
 		RequiresAuth: true,
 	}
