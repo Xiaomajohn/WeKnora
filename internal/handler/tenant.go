@@ -179,6 +179,30 @@ const (
 // blunting drive-by abuse against POST /tenants (see CreateTenant).
 const defaultMaxOwnedTenantsPerUser = 10
 
+// callerHoldsMemberRole reports whether the user has an active
+// TenantRoleMember row in ANY tenant. Used by CreateTenant as a handler-layer
+// fallback to the POST /tenants route's g.Viewer() guard: when EnableRBAC=false
+// the route middleware logs-and-passes, so Member users would otherwise be
+// able to acquire a personal workspace through this endpoint regardless of
+// the flag. The check looks at any tenant (not just the active one) because
+// a Member's role is provisioned by their owning admin — we never want a
+// Member to be able to spin up additional workspaces on their own.
+func (h *TenantHandler) callerHoldsMemberRole(ctx context.Context, userID string) (bool, error) {
+	if h.memberService == nil {
+		return false, nil
+	}
+	memberships, err := h.memberService.ListByUser(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	for _, m := range memberships {
+		if m != nil && m.Role == types.TenantRoleMember {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // resolveMaxOwnedTenantsPerUser returns the current cap, walking the
 // 3-tier resolver: system_settings DB row > WEKNORA_TENANT_MAX_OWNED_PER_USER
 // env > config.Tenant.MaxOwnedPerUser (yaml) > defaultMaxOwnedTenantsPerUser.
@@ -237,6 +261,34 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 		logger.Warnf(ctx, "Self-service tenant creation denied by policy for user %s", caller.ID)
 		c.Error(errors.NewTenantCreationDisabledError())
 		return
+	}
+
+	// Member-aware create guard (defence in depth for the POST /tenants
+	// route's g.Viewer()): if the caller is a Member in ANY tenant they
+	// should not be able to spin up their own workspace. The route guard
+	// already rejects Member when EnableRBAC=true, but middleware logs
+	// and passes when EnableRBAC=false (rollout window) — this handler
+	// check is the authoritative fallback so Member users never acquire
+	// a personal workspace through this endpoint regardless of the flag.
+	// Cross-tenant superusers are exempt above. ListByUser is also reused
+	// by the self-service quota check below, so when this code path is
+	// enabled we cache the result to avoid a duplicate query.
+	if !caller.CanAccessAllTenants && h.memberService != nil {
+		isMember, memberErr := h.callerHoldsMemberRole(ctx, caller.ID)
+		if memberErr != nil {
+			logger.Errorf(ctx, "Failed to check member-role status for user %s: %v", caller.ID, memberErr)
+			c.Error(errors.NewInternalServerError("Failed to validate workspace creation").WithDetails(memberErr.Error()))
+			return
+		}
+		if isMember {
+			logger.Warnf(ctx,
+				"Workspace creation rejected: user %s holds TenantRoleMember in at least one tenant",
+				caller.ID)
+			c.Error(errors.NewForbiddenError(
+				"members cannot create workspaces; ask an administrator to be promoted or to invite you to an existing workspace",
+			))
+			return
+		}
 	}
 
 	var tenantData types.Tenant
