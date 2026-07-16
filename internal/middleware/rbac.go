@@ -296,62 +296,6 @@ func rbacEnforcementEnabled(cfg *config.Config) bool {
 	return cfg != nil && cfg.Tenant.IsRBACEnforced()
 }
 
-// RequireExactRoleOrOwnershipOrRole grants access in two mutually
-// exclusive paths:
-//
-//  1. If the caller's tenant role is EXACTLY `exact` (typically
-//     TenantRoleMember), pass through. This is the ONLY legitimate way
-//     to widen a route beyond its existing role/ownership floor without
-//     affecting the original 4-role matrix. The fast-path short-circuits
-//     before the lookup, so it never widens viewer's content-write
-//     window.
-//
-//  2. Otherwise fall through to the standard ownership-or-min-role
-//     check (`RequireOwnershipOrRole(min, lookup, cfg)`), which
-//     preserves EXACTLY the semantics of the original `OwnedKBOrAdmin`
-//     family for the existing 4 roles. This is the byte-for-byte
-//     equivalent of pasting the legacy guard in.
-//
-// Usage: KB content upload routes want Member users to be able to
-// upload into KBs they have per-KB write access to (a downstream
-// KBAccessWrite("id") will gate the actual KB selection), WITHOUT
-// simultaneously widening what viewer/contributor can do when they
-// were NOT the KB creator. The fallback branch's behaviour is
-// independent of the new role.
-//
-// API-key principals short-circuit like in RequireOwnershipOrRole — the
-// APIKeyGate is the source of truth for them, never the role ladder.
-func RequireExactRoleOrOwnershipOrRole(
-	exact types.TenantRole,
-	min types.TenantRole,
-	lookup CreatorLookup,
-	cfg *config.Config,
-) gin.HandlerFunc {
-	warnOnNilConfig(cfg)
-	return func(c *gin.Context) {
-		ctx := c.Request.Context()
-		// API-key principals: same short-circuit as RequireOwnershipOrRole.
-		if _, ok := types.TenantAPIKeyScopeFromContext(ctx); ok {
-			c.Next()
-			return
-		}
-		role := types.TenantRoleFromContext(ctx)
-
-		// 1. Exact-role fast path (e.g. caller is the new Member role).
-		//    No lookup, no comparison — we trust the explicit role match
-		//    and let downstream per-resource guards (KBAccessWrite,
-		//    KBAccessRead) enforce the fine-grained access.
-		if role != "" && role == exact {
-			c.Next()
-			return
-		}
-
-		// 2. Fallback: defer to the legacy ownership/role matrix. The
-		//    call below is byte-equivalent to passing OwnedKBOrAdmin etc.
-		RequireOwnershipOrRole(min, lookup, cfg)(c)
-	}
-}
-
 // ErrOwnershipForbidden is returned by EvaluateOwnershipOrRole when the
 // caller is neither the resource creator nor meets the minimum role.
 var ErrOwnershipForbidden = errors.New("rbac: ownership or role insufficient")

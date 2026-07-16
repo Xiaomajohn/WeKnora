@@ -212,42 +212,6 @@ func (g *rbacGuards) Owner() gin.HandlerFunc {
 	return middleware.RequireRole(types.TenantRoleOwner, g.cfg)
 }
 
-// Member is the role-only guard for TenantRoleMember (level 5). It is
-// the read-mostly role admitted by tenant-membership alone. RESERVED
-// for future routes that genuinely want to let any Member through
-// without per-resource checks. The KB upload routes use KBContentWriter
-// instead because they still need the per-KB ownership-or-Admin matrix
-// for non-Member callers.
-//
-// Direct use of g.Member() in route lines is intentionally discouraged
-// for KB-content mutation routes: it would let viewer/contributor
-// pass the role floor (10/20 ≥ 5) and acquire upload rights that the
-// legacy KBContentWriter matrix denies them. See KBContentWriter
-// godoc for why we do not substitute g.Member() for g.OwnedKBOrAdmin().
-func (g *rbacGuards) Member() gin.HandlerFunc {
-	return middleware.RequireRole(types.TenantRoleMember, g.cfg)
-}
-
-// KBContentWriter is the SEMANTIC guard for "upload or otherwise write
-// content into a specific KB". For the new TenantRoleMember it
-// short-circuits to allow, deferring to a downstream KBAccessWrite("id")
-// for per-KB editor access. For owner/admin/contributor/viewer it
-// delegates to the exact same matrix as OwnedKBOrAdmin (Admin+ OR
-// creator), preserving the existing 4-role behaviour byte-for-byte.
-//
-// This is the ONLY safe way to admit Member on the KB upload routes
-// without also widening what viewer and contributor can do: a naive
-// g.Member() replacement would let both legacy roles acquire the
-// per-KB Editor right that only KBAccessWrite was supposed to grant.
-func (g *rbacGuards) KBContentWriter() gin.HandlerFunc {
-	return middleware.RequireExactRoleOrOwnershipOrRole(
-		types.TenantRoleMember,
-		types.TenantRoleAdmin,
-		g.kbCreator,
-		g.cfg,
-	)
-}
-
 // API-key authorization — a SEPARATE authority from the JWT role/ownership
 // guards above. Instead of stacking a per-route guard that also had to know
 // the caller's ownership, every API-key-accessible route declares one

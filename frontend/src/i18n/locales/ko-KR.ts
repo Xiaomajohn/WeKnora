@@ -6546,8 +6546,6 @@ export default {
       admin: "관리자",
       contributor: "기여자",
       viewer: "뷰어",
-      // 방문자+: 읽기는 뷰어와 동일, 쓰기는 Editor 권한 공유된 KB 업로드만 허용
-      member: "방문자+",
     },
     add: {
       button: "멤버 초대",

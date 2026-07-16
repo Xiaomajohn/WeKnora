@@ -666,9 +666,6 @@ const roleOptions = computed(() => [
   { label: t('tenantMember.role.admin'), value: 'admin' },
   { label: t('tenantMember.role.contributor'), value: 'contributor' },
   { label: t('tenantMember.role.viewer'), value: 'viewer' },
-  // member（level=5）置于下拉底部，避免与原 4 角色顺序混淆；
-  // 仅在 admin/owner 主动邀请时由下拉选择，默认邀请角色仍是 contributor。
-  { label: t('tenantMember.role.member'), value: 'member' },
 ])
 
 /** 下拉层须高于邀请浮层（3050）与组织设置全屏遮罩，否则会被压住 */
@@ -683,7 +680,7 @@ const roleSelectPopupProps = {
 // PR 2 enforcement; if a permission moves between roles, update both
 // sides in the same PR.
 type RolePerm = { key: string; has: boolean }
-const roleMatrixOrder: TenantRole[] = ['owner', 'admin', 'contributor', 'viewer', 'member']
+const roleMatrixOrder: TenantRole[] = ['owner', 'admin', 'contributor', 'viewer']
 const roleMatrix: Record<TenantRole, RolePerm[]> = {
   owner: [
     { key: 'manageMembers', has: true },
@@ -713,16 +710,6 @@ const roleMatrix: Record<TenantRole, RolePerm[]> = {
     { key: 'createOwnKB', has: false },
     { key: 'readAll', has: true },
   ],
-  // member（level=5）：读权限等同 viewer，写权限收口到 KBAccessWrite
-  // （CreateKnowledgeFromFile/URL/Manual，按 KB 共享 Editor 维度授权），
-  // 矩阵中只显式标记 readAll=true；其它写入相关的 key 一律 false。
-  member: [
-    { key: 'manageMembers', has: false },
-    { key: 'manageTenantConfig', has: false },
-    { key: 'manageInfra', has: false },
-    { key: 'createOwnKB', has: false },
-    { key: 'readAll', has: true },
-  ],
 }
 
 function roleMatrixIcon(role: TenantRole): string {
@@ -733,10 +720,6 @@ function roleMatrixIcon(role: TenantRole): string {
       return 'user-safety'
     case 'contributor':
       return 'edit'
-    case 'member':
-      // 比 viewer 的 browse 更贴近「访客+」的「有限参与」语义，
-      // 但保留在 tdesign 图标库里。
-      return 'user-1'
     default:
       return 'browse'
   }

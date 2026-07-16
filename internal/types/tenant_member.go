@@ -30,16 +30,6 @@ const (
 	// TenantRoleViewer has read-only access to tenant resources and can
 	// run agents that are explicitly marked as runnable by viewers.
 	TenantRoleViewer TenantRole = "viewer"
-	// TenantRoleMember is a read-mostly user that can additionally write
-	// KB content (upload file/URL/manual knowledge) for KBs shared with
-	// them as Editor. It is NOT allowed to create/edit KBs, manage members,
-	// or touch any tenant infrastructure. Its level is intentionally set
-	// BELOW TenantRoleViewer (5 < 10): this forces every existing
-	// 'viewer'-thresholded check to reject Member by default, preserving
-	// the original 4-role behaviour. Newer routes that need to admit
-	// Member use the explicit RequireExactRoleOrOwnershipOrRole helper so
-	// the per-KB OwnerOrAdmin matrix stays untouched.
-	TenantRoleMember TenantRole = "member"
 )
 
 // tenantRoleLevel maps each role to a numeric level used for hierarchy
@@ -50,26 +40,9 @@ var tenantRoleLevel = map[TenantRole]int{
 	TenantRoleAdmin:       30,
 	TenantRoleContributor: 20,
 	TenantRoleViewer:      10,
-	// Member sits below Viewer: this is intentional and load-bearing for
-	// the design (see TenantRoleMember godoc). Do NOT change the value
-	// without re-running the RBAC parity tests for the 4 legacy roles.
-	TenantRoleMember: 5,
 }
 
-// AllTenantRoles returns every defined role in descending level order.
-// Useful for emitting human-readable error messages that list the entire
-// current set without hard-coding role names in handlers.
-func AllTenantRoles() []TenantRole {
-	return []TenantRole{
-		TenantRoleOwner,
-		TenantRoleAdmin,
-		TenantRoleContributor,
-		TenantRoleViewer,
-		TenantRoleMember,
-	}
-}
-
-// IsValid reports whether r is one of the defined tenant roles.
+// IsValid reports whether r is one of the four defined tenant roles.
 func (r TenantRole) IsValid() bool {
 	_, ok := tenantRoleLevel[r]
 	return ok

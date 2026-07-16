@@ -6567,8 +6567,6 @@ export default {
       admin: 'Admin',
       contributor: 'Contributor',
       viewer: 'Viewer',
-      // Visitor+: read = viewer; write = upload to KBs shared with Editor.
-      member: 'Visitor+',
     },
     add: {
       button: 'Add Member',

@@ -63,10 +63,6 @@ export const useMenuStore = defineStore('menuStore', () => {
   // 共享空间 (organizations) 仅对当前空间的 admin / owner 暴露入口。
   // viewer / contributor 即便在共享空间里拥有资源，也无需自行管理共享关系，
   // 入口在侧栏只会徒增噪音；后端 RBAC 才是权限的最终来源（见 middleware/rbac.go）。
-  // 新增的 member 角色（level=5）进一步屏蔽 settings 入口——设置页在
-  // Settings.vue canSeeSection 会对 member 全部拒绝，等于“点进去也看不到内容”，
-  // 索性把入口从侧栏拿掉。member 的 level < viewer 的 10，所以这条规则
-  // 对原 4 角色永远为 false，等价于 0 影响。
   const visibleMenuArr = computed(() => {
     const authStore = useAuthStore()
     return menuArr.filter(item => {
@@ -74,9 +70,6 @@ export const useMenuStore = defineStore('menuStore', () => {
         return false
       }
       if (item.path === 'organizations' && !authStore.hasRole('admin')) {
-        return false
-      }
-      if (authStore.currentTenantRole === 'member' && item.path === 'settings') {
         return false
       }
       return true

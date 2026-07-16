@@ -84,21 +84,6 @@ func parseTenantIDFromPath(c *gin.Context) (uint64, bool) {
 	return v, true
 }
 
-// invalidRoleMessage returns the human-readable "role must be one of …"
-// error message used by AddMember / UpdateMemberRole / CreateInvitation /
-// CreateInviteLink. It pulls the canonical role list from types so adding
-// a new role (e.g. TenantRoleMember) automatically widens the message
-// without any further edits — without this helper, each new role would
-// need three independent string edits to stay in sync.
-func invalidRoleMessage() string {
-	roles := types.AllTenantRoles()
-	parts := make([]string, 0, len(roles))
-	for _, r := range roles {
-		parts = append(parts, string(r))
-	}
-	return "role must be one of " + strings.Join(parts, "/")
-}
-
 // ListMembers godoc
 // @Summary      列出空间成员
 // @Description  分页返回当前空间内 active 成员（含每位成员的角色、邮箱、头像）；支持 q 按邮箱/用户名筛选
@@ -217,7 +202,7 @@ func (h *TenantMemberHandler) AddMember(c *gin.Context) {
 	// gives the client a better error message than the generic service
 	// sentinel-mapped 400.
 	if !req.Role.IsValid() {
-		c.Error(apperrors.NewValidationError(invalidRoleMessage()))
+		c.Error(apperrors.NewValidationError("role must be one of owner/admin/contributor/viewer"))
 		return
 	}
 
@@ -315,7 +300,7 @@ func (h *TenantMemberHandler) UpdateMemberRole(c *gin.Context) {
 		return
 	}
 	if !req.Role.IsValid() {
-		c.Error(apperrors.NewValidationError(invalidRoleMessage()))
+		c.Error(apperrors.NewValidationError("role must be one of owner/admin/contributor/viewer"))
 		return
 	}
 

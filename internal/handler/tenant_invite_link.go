@@ -76,7 +76,7 @@ func (h *TenantInvitationHandler) CreateInviteLink(c *gin.Context) {
 		return
 	}
 	if !req.Role.IsValid() {
-		c.Error(apperrors.NewValidationError(invalidRoleMessage()))
+		c.Error(apperrors.NewValidationError("role must be one of owner/admin/contributor/viewer"))
 		return
 	}
 
