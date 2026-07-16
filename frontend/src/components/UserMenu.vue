@@ -74,15 +74,15 @@
              分别对应 viewer/viewer/admin/admin/owner（详情见 Settings.vue 的
              SECTION_MIN_ROLE）。低角色用户看到这些入口点进去也只能看到
              role-denied 兜底页，索性藏起来。 -->
-        <div v-if="canSeeQuickNav('members')" class="menu-item" @click="handleQuickNav('members')">
+        <div v-if="canSeeQuickNav('members') && !isMember" class="menu-item" @click="handleQuickNav('members')">
           <t-icon name="usergroup" class="menu-icon" />
           <span>{{ $t('tenantMember.title') }}</span>
         </div>
-        <div v-if="canSeeQuickNav('models')" class="menu-item" @click="handleQuickNav('models')">
+        <div v-if="canSeeQuickNav('models') && !isMember" class="menu-item" @click="handleQuickNav('models')">
           <t-icon name="control-platform" class="menu-icon" />
           <span>{{ $t('settings.modelManagement') }}</span>
         </div>
-        <div v-if="canSeeQuickNav('websearch')" class="menu-item" @click="handleQuickNav('websearch')">
+        <div v-if="canSeeQuickNav('websearch') && !isMember" class="menu-item" @click="handleQuickNav('websearch')">
           <svg width="16" height="16" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg"
             class="menu-icon svg-icon">
             <circle cx="9" cy="9" r="7" stroke="currentColor" stroke-width="1.2" fill="none" />
@@ -95,16 +95,16 @@
           </svg>
           <span>{{ $t('settings.webSearchConfig') }}</span>
         </div>
-        <div v-if="canSeeQuickNav('mcp')" class="menu-item" @click="handleQuickNav('mcp')">
+        <div v-if="canSeeQuickNav('mcp') && !isMember" class="menu-item" @click="handleQuickNav('mcp')">
           <t-icon name="tools" class="menu-icon" />
           <span>{{ $t('settings.mcpService') }}</span>
         </div>
-        <div v-if="canSeeQuickNav('integration-api')" class="menu-item" @click="handleQuickNav('integration-api')">
+        <div v-if="canSeeQuickNav('integration-api') && !isMember" class="menu-item" @click="handleQuickNav('integration-api')">
           <t-icon name="secured" class="menu-icon" />
           <span>{{ $t('integrations.tabs.api') }}</span>
         </div>
         <div class="menu-divider"></div>
-        <div class="menu-item" @click="handleSettings">
+        <div v-if="!isMember" class="menu-item" @click="handleSettings">
           <t-icon name="setting" class="menu-icon" />
           <span>{{ $t('general.allSettings') }}</span>
         </div>
@@ -260,6 +260,13 @@ const canSeeQuickNav = (key: string): boolean => {
   if (authStore.canAccessAllTenants) return true
   return authStore.hasRole(QUICKNAV_MIN_ROLE[key] ?? 'viewer')
 }
+
+// member 角色（level=5）只看 KB / 对话 / 智能体 / 共享空间——这些入口
+// 全部下沉到 settings 弹窗里了，弹窗本身对 member 又一律显示 role-denied
+// 兜底页（见 Settings.vue canSeeSection）。所以 member 的下拉菜单只保留
+// 「当前空间 / 退出登录」，所有 quickNav + 「全部设置」入口一律隐藏。
+// level=5 < 所有原 4 角色的 level，所以这条规则对原 4 角色永远是 false。
+const isMember = computed(() => authStore.currentTenantRole === 'member')
 
 const menuRef = ref<HTMLElement>()
 const tenantMenuItemRef = ref<HTMLElement>()

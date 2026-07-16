@@ -1,8 +1,12 @@
 import { get, post, put, del } from '@/utils/request'
 
-// TenantRole mirrors internal/types/tenant_member.go's four-role enum.
+// TenantRole mirrors internal/types/tenant_member.go's role enum.
 // Keep the string values aligned with the Go constants.
-export type TenantRole = 'owner' | 'admin' | 'contributor' | 'viewer'
+// 'member' was added in PR for the new Visitor+ role (level=5): reader
+// on all tenant resources + KB content upload when the per-KB editor
+// grant allows. UI surfaces it via TenantMembers' roleMatrix and the
+// invite-by-email roleOptions.
+export type TenantRole = 'owner' | 'admin' | 'contributor' | 'viewer' | 'member'
 
 export type TenantMemberStatus = 'active' | 'invited' | 'suspended'
 

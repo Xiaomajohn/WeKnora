@@ -296,6 +296,11 @@ const normalizeSettingsSection = (section: string) => {
 }
 
 const canSeeSection = (key: string): boolean => {
+  // member 角色（level=5）仅看到侧栏四个入口（对话 / 知识库 / 智能体 / 共享空间），
+  // 任何设置项都不开放。弹窗本身可以为 member 打开（例如点击其他地方残留的「全部
+  // 设置」链路），但展开后统一进入 role-denied 兜底页。level=5 < 原 4 角色，对它们
+  // 这条规则永远为 false，等价于 0 影响。
+  if (authStore.currentTenantRole === 'member') return false
   if (isIntegrationSection(key)) {
     const min = INTEGRATION_TAB_MIN_ROLE[integrationTabFromSection(key)]
     if (!min) return true

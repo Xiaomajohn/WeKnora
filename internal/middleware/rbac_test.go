@@ -340,3 +340,357 @@ func TestRequireOwnershipOrRole_FailOpenOnLookupErrorWhenRBACDisabled(t *testing
 		t.Fatalf("EnableRBAC=false + lookup error must fail open, got %d", w.Code)
 	}
 }
+
+// ---------- TenantRoleMember invariants ----------
+//
+// These tests pin two design contracts for the new TenantRoleMember
+// (level 5) role:
+//
+//   1. The level values of the four legacy roles MUST stay in their
+//      existing band (owner=40, admin=30, contributor=20, viewer=10).
+//      Member MUST sit BELOW viewer (5) so every existing
+//      'viewer'-thresholded check rejects Member automatically. This is
+//      what preserves the “no impact on the original 4 roles” hard
+//      constraint: any HasPermission(viewer) call must compare 5 < 10
+//      and reject, regardless of code that doesn't yet know about the
+//      new role.
+//
+//   2. IsValid / Level / AllTenantRoles must all agree. If any of them
+//      drift the route-layer guards and the handler error message fall
+//      out of sync; a member role can survive schema-wise but get
+//      silently rejected by every RequireRole gate.
+
+func TestTenantRoleLevels_LegacyBandsUnchanged(t *testing.T) {
+	cases := map[types.TenantRole]int{
+		types.TenantRoleOwner:       40,
+		types.TenantRoleAdmin:       30,
+		types.TenantRoleContributor: 20,
+		types.TenantRoleViewer:      10,
+	}
+	for role, want := range cases {
+		if got := role.Level(); got != want {
+			t.Errorf("legacy role %s level drifted: got %d want %d", role, got, want)
+		}
+	}
+}
+
+func TestTenantRoleMember_SitsBelowViewer(t *testing.T) {
+	if got := types.TenantRoleMember.Level(); got >= types.TenantRoleViewer.Level() {
+		t.Fatalf("Member level must be strictly less than Viewer (member=%d viewer=%d) "+
+			"so existing 'viewer'-threshold checks still reject Member", got, types.TenantRoleViewer.Level())
+	}
+}
+
+func TestTenantRoleMember_HasPermissionRejectsForLegacyThresholds(t *testing.T) {
+	// The whole point of Member=5: every existing role check that
+	// requires >= viewer/ad/contributor/owner must transparently
+	// reject Member without any code change. Without this, adding
+	// Member at level 15 would accidentally widen every viewer-gate
+	// to admit Member (the “hidden escalation” the design rejects).
+	if types.TenantRoleMember.HasPermission(types.TenantRoleViewer) {
+		t.Errorf("Member (level 5) must NOT have Viewer permission (the design rejects level >= 10)")
+	}
+	if types.TenantRoleMember.HasPermission(types.TenantRoleContributor) {
+		t.Errorf("Member must NOT have Contributor permission")
+	}
+}
+
+func TestTenantRole_LegacyHasPermissionStillAdmitsMember(t *testing.T) {
+	// A legacy user with the Owner role can be a member of ANY group
+	// that requires >= member (because Member is the lowest). This
+	// keeps HasPermission monotonic so Member-floor routes do not
+	// require an extra branch.
+	for _, r := range []types.TenantRole{
+		types.TenantRoleOwner, types.TenantRoleAdmin,
+		types.TenantRoleContributor, types.TenantRoleViewer,
+	} {
+		if !r.HasPermission(types.TenantRoleMember) {
+			t.Errorf("legacy role %s should clear Member floor, but does not", r)
+		}
+	}
+}
+
+func TestAllTenantRoles_IncludesMemberAtLowestLevel(t *testing.T) {
+	got := types.AllTenantRoles()
+	// Must end with Member (lowest level) — handlers rely on this order
+	// when rendering role lists in invite dropdowns.
+	wantTail := types.TenantRoleMember
+	if len(got) == 0 || got[len(got)-1] != wantTail {
+		t.Fatalf("AllTenantRoles must end with %s, got %v", wantTail, got)
+	}
+	for _, r := range got {
+		if !r.IsValid() {
+			t.Errorf("AllTenantRoles returned invalid role %s", r)
+		}
+	}
+}
+
+// ---------- RequireExactRoleOrOwnershipOrRole ----------
+//
+// RequireExactRoleOrOwnershipOrRole is the new guard that admits Member
+// on KB content upload routes WITHOUT widening the matrix for the
+// legacy 4 roles. Each legacy-role test below pins a specific cell of
+// the parity table in the design doc; if any of these break, the guard
+// has silently escalated a legacy role's rights.
+
+func TestRequireExactRoleOrOwnershipOrRole_MemberShortCircuitsBeforeLookup(t *testing.T) {
+	// The fast-path for Member must skip the creator lookup entirely
+	// — that's how Member routes don't pay the per-request DB cost of
+	// RequireOwnershipOrRole's KBCreatorLookup query.
+	called := false
+	lookup := func(c *gin.Context) (string, error) {
+		called = true
+		return "", errors.New("must not be called")
+	}
+	w := rbacTestHarness(types.TenantRoleMember, "u1",
+		RequireExactRoleOrOwnershipOrRole(
+			types.TenantRoleMember,
+			types.TenantRoleAdmin,
+			lookup,
+			cfgRBAC(true),
+		))
+	if w.Code != http.StatusOK {
+		t.Fatalf("Member must short-circuit to allow on Member gate, got %d", w.Code)
+	}
+	if called {
+		t.Fatalf("Member fast-path must skip the creator lookup, got %d calls", 1)
+	}
+}
+
+func TestRequireExactRoleOrOwnershipOrRole_AdminParityBypassesLookup(t *testing.T) {
+	// Admin must take the legacy fallback path with the SAME fast-path
+	// semantics as OwnedKBOrAdmin — role >= min bypasses the lookup.
+	called := false
+	lookup := func(c *gin.Context) (string, error) {
+		called = true
+		return "", errors.New("must not be called")
+	}
+	w := rbacTestHarness(types.TenantRoleAdmin, "u1",
+		RequireExactRoleOrOwnershipOrRole(
+			types.TenantRoleMember,
+			types.TenantRoleAdmin,
+			lookup,
+			cfgRBAC(true),
+		))
+	if w.Code != http.StatusOK {
+		t.Fatalf("Admin must clear Member gate via fallback fast-path, got %d", w.Code)
+	}
+	if called {
+		t.Fatalf("Admin fallback must not invoke lookup (parity with OwnedKBOrAdmin)")
+	}
+}
+
+func TestRequireExactRoleOrOwnershipOrRole_OwnerParityBypassesLookup(t *testing.T) {
+	called := false
+	lookup := func(c *gin.Context) (string, error) {
+		called = true
+		return "", errors.New("must not be called")
+	}
+	w := rbacTestHarness(types.TenantRoleOwner, "u1",
+		RequireExactRoleOrOwnershipOrRole(
+			types.TenantRoleMember,
+			types.TenantRoleAdmin,
+			lookup,
+			cfgRBAC(true),
+		))
+	if w.Code != http.StatusOK {
+		t.Fatalf("Owner must clear Member gate via fallback, got %d", w.Code)
+	}
+	if called {
+		t.Fatalf("Owner fallback must not invoke lookup")
+	}
+}
+
+func TestRequireExactRoleOrOwnershipOrRole_ViewerNonCreatorRejected(t *testing.T) {
+	// THE CRITICAL REGRESSION TEST: a non-creator Viewer who somehow
+	// reaches a KB upload route must STILL get 403. This is what
+	// guards against the rejected alternative “g.Member() on the KB
+	// routes”, which would let Viewer(10) clear a Member(5) floor and
+	// acquire KB Editor rights they never had.
+	lookup := func(c *gin.Context) (string, error) { return "someone-else", nil }
+	w := rbacTestHarness(types.TenantRoleViewer, "u1",
+		RequireExactRoleOrOwnershipOrRole(
+			types.TenantRoleMember,
+			types.TenantRoleAdmin,
+			lookup,
+			cfgRBAC(true),
+		))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("Viewer non-creator must hit 403 (parity with OwnedKBOrAdmin), got %d", w.Code)
+	}
+}
+
+func TestRequireExactRoleOrOwnershipOrRole_ViewerCreatorAllowed(t *testing.T) {
+	// Identity-equality handoff: the legacy fallback treats a Viewer
+	// who IS the KB creator exactly like OwnedKBOrAdmin does. We don't
+	// keep an extra “creator but Viewer” case in production, but the
+	// parity test pins it so a future “fast-path everyone” refactor
+	// surfaces as a behaviour diff if it widens this.
+	lookup := func(c *gin.Context) (string, error) { return "u1", nil }
+	w := rbacTestHarness(types.TenantRoleViewer, "u1",
+		RequireExactRoleOrOwnershipOrRole(
+			types.TenantRoleMember,
+			types.TenantRoleAdmin,
+			lookup,
+			cfgRBAC(true),
+		))
+	if w.Code != http.StatusOK {
+		t.Fatalf("Viewer-as-creator must pass fallback, got %d", w.Code)
+	}
+}
+
+func TestRequireExactRoleOrOwnershipOrRole_ContributorNonCreatorRejected(t *testing.T) {
+	// Pin parity for contributor non-creator — they fail the
+	// role >= admin branch and fall through to lookup; non-match ->
+	// 403. Same matrix as OwnedKBOrAdmin.
+	lookup := func(c *gin.Context) (string, error) { return "someone-else", nil }
+	w := rbacTestHarness(types.TenantRoleContributor, "u1",
+		RequireExactRoleOrOwnershipOrRole(
+			types.TenantRoleMember,
+			types.TenantRoleAdmin,
+			lookup,
+			cfgRBAC(true),
+		))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("Contributor non-creator must hit 403, got %d", w.Code)
+	}
+}
+
+func TestRequireExactRoleOrOwnershipOrRole_ContributorCreatorAllowed(t *testing.T) {
+	// Contributors who own the KB pass via ownership equality — this
+	// is the “Contributor in their OWN KB acts like Owner” invariant
+	// the design relies on.
+	lookup := func(c *gin.Context) (string, error) { return "u1", nil }
+	w := rbacTestHarness(types.TenantRoleContributor, "u1",
+		RequireExactRoleOrOwnershipOrRole(
+			types.TenantRoleMember,
+			types.TenantRoleAdmin,
+			lookup,
+			cfgRBAC(true),
+		))
+	if w.Code != http.StatusOK {
+		t.Fatalf("Contributor creator must clear ownership gate, got %d", w.Code)
+	}
+}
+
+func TestRequireExactRoleOrOwnershipOrRole_LookupErrorReturns503(t *testing.T) {
+	// Parity with RequireOwnershipOrRole: a transient lookup failure
+	// surfaces as 503 for non-Member roles (Owner/Admin bypass lookup
+	// via the fast-path so they never reach this branch). The contract
+	// must remain consistent across both guards.
+	lookup := func(c *gin.Context) (string, error) { return "", errors.New("boom") }
+	w := rbacTestHarness(types.TenantRoleContributor, "u1",
+		RequireExactRoleOrOwnershipOrRole(
+			types.TenantRoleMember,
+			types.TenantRoleAdmin,
+			lookup,
+			cfgRBAC(true),
+		))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("lookup error on non-Member fallback must be 503, got %d", w.Code)
+	}
+}
+
+func TestRequireExactRoleOrOwnershipOrRole_NotFoundPassesThroughTo404(t *testing.T) {
+	// Parity with RequireOwnershipOrRole: ErrResourceNotFound from the
+	// lookup must let the handler emit its own 404 instead of being
+	// masked as 403.
+	called := false
+	lookup := func(c *gin.Context) (string, error) {
+		return "", ErrResourceNotFound
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		ctx := c.Request.Context()
+		ctx = context.WithValue(ctx, types.TenantRoleContextKey, types.TenantRoleContributor)
+		ctx = context.WithValue(ctx, types.UserIDContextKey, "u1")
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+	router.GET("/protected",
+		RequireExactRoleOrOwnershipOrRole(
+			types.TenantRoleMember,
+			types.TenantRoleAdmin,
+			lookup,
+			cfgRBAC(true),
+		),
+		func(c *gin.Context) {
+			called = true
+			c.JSON(http.StatusNotFound, gin.H{"error": "kb not found"})
+		},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if !called {
+		t.Fatalf("handler should run so it can emit 404")
+	}
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected handler 404 to win, got %d", w.Code)
+	}
+}
+
+func TestRequireExactRoleOrOwnershipOrRole_FailOpenOnRBACDisabled(t *testing.T) {
+	// Rollout safety: when EnableRBAC=false the middleware must let
+	// every request through without consulting the lookup — same
+	// contract as RequireOwnershipOrRole.
+	calls := 0
+	lookup := func(c *gin.Context) (string, error) {
+		calls++
+		return "someone-else", nil
+	}
+	w := rbacTestHarness(types.TenantRoleViewer, "u1",
+		RequireExactRoleOrOwnershipOrRole(
+			types.TenantRoleMember,
+			types.TenantRoleAdmin,
+			lookup,
+			cfgRBAC(false),
+		))
+	if w.Code != http.StatusOK {
+		t.Fatalf("EnableRBAC=false must fail open, got %d", w.Code)
+	}
+	if calls != 0 {
+		t.Fatalf("lookup must not run when EnableRBAC=false (got %d calls)", calls)
+	}
+}
+
+func TestRequireExactRoleOrOwnershipOrRole_CrossTenantSuperuserBypass(t *testing.T) {
+	// Cross-tenant superusers resolve to Admin in foreign tenants
+	// (see resolveTenantRole) and must short-circuit the fallback
+	// without invoking the lookup. Parity with the legacy
+	// RequireOwnershipOrRole cross-tenant test.
+	calls := 0
+	lookup := func(c *gin.Context) (string, error) {
+		calls++
+		return "", nil
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		ctx := c.Request.Context()
+		ctx = context.WithValue(ctx, types.TenantRoleContextKey, types.TenantRoleAdmin)
+		ctx = context.WithValue(ctx, types.UserIDContextKey, "su1")
+		ctx = context.WithValue(ctx, types.UserContextKey, &types.User{
+			ID: "su1", CanAccessAllTenants: true,
+		})
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+	router.GET("/protected",
+		RequireExactRoleOrOwnershipOrRole(
+			types.TenantRoleMember,
+			types.TenantRoleOwner,
+			lookup,
+			cfgRBACWithCrossTenant(true),
+		),
+		func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{}) },
+	)
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("superuser must bypass Owner-or-creator gate, got %d", w.Code)
+	}
+	if calls != 0 {
+		t.Fatalf("superuser bypass must skip lookup, got %d calls", calls)
+	}
+}

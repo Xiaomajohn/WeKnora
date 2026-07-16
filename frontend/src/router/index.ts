@@ -383,6 +383,26 @@ router.beforeEach(async (to, from, next) => {
     return
   }
 
+  // member 角色（level=5）仅看到侧栏四个入口（对话 / 知识库 / 智能体 / 共享空间），
+  // 任何设置类入口都不开放——这里拦截的是 /platform/settings、/platform/integrations
+  // 以及 /platform/system/* 的 URL 直链。如果不拦住，member 在浏览器里手输 URL 仍然
+  // 能跳进设置弹窗（Settings.vue canSeeSection 会让所有 section 进入 role-denied，
+  // 但页面本身还是会闪现）。/platform/system/* 走 requiresSystemAdmin 也已经会拦截，
+  // 这里加个显式判断是为了让路由层与会话层逻辑一致。
+  // level=5 < 原 4 角色，对它们这条规则永远是 false，等价于 0 影响。
+  if (authStore.currentTenantRole === 'member') {
+    const path = to.path
+    if (
+      path === '/platform/settings' ||
+      path === '/platform/integrations' ||
+      path === '/platform/system' ||
+      path.startsWith('/platform/system/')
+    ) {
+      next('/platform/knowledge-bases')
+      return
+    }
+  }
+
   // SystemAdmin gate — checked AFTER auth so a non-admin who's logged
   // out gets redirected to /login first (consistent with how the rest
   // of the auth flow works), and only an authenticated non-admin sees

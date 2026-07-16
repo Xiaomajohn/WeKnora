@@ -6589,6 +6589,8 @@ export default {
       admin: "管理员",
       contributor: "编辑",
       viewer: "访客",
+      // 访客+：读权限等同访客，写权限仅允许在共享 Editor 的 KB 上传内容
+      member: "访客+",
     },
     add: {
       button: "邀请成员",

@@ -169,12 +169,15 @@ export const useAuthStore = defineStore('auth', () => {
   // localStorage, MUST be treated as UI-rendering-only. Never rely on
   // hasRole() for security decisions; the server is the source of truth.
   const ROLE_LEVEL: Record<string, number> = {
+    member: 5,
     viewer: 10,
     contributor: 20,
     admin: 30,
     owner: 40,
   }
-  const hasRole = (min: 'viewer' | 'contributor' | 'admin' | 'owner'): boolean => {
+  const hasRole = (
+    min: 'member' | 'viewer' | 'contributor' | 'admin' | 'owner',
+  ): boolean => {
     return (ROLE_LEVEL[currentTenantRole.value] ?? 0) >= ROLE_LEVEL[min]
   }
 
