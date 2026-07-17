@@ -267,8 +267,10 @@ services:
         fi
         echo "[admin-init] ensuring admin '$$ADMIN_USERNAME' ($$ADMIN_EMAIL) and workspace '$$ADMIN_TENANT_NAME' exist in $$DB_NAME..."
         psql_run() { psql -h postgres -U "$$DB_USER" -d "$$DB_NAME" -v ON_ERROR_STOP=0 -c "$$1"; }
-        # 1. 默认租户（name 非 UNIQUE，用 NOT EXISTS 保证幂等）
-        psql_run "INSERT INTO tenants (name, description, retriever_engines, status) SELECT '$$ADMIN_TENANT_NAME', 'Default admin workspace', '[]', 'active' WHERE NOT EXISTS (SELECT 1 FROM tenants WHERE name = '$$ADMIN_TENANT_NAME');"
+        # 1. 默认租户（name 非 UNIQUE，用 NOT EXISTS 保证幂等）。
+        #    必须传 business（NOT NULL，无 default）：业务代码走 GORM 会用 zero value ""，这里也填 "" 保持一致。
+        #    api_key 已被 migration 000065 删除，无需再传。
+        psql_run "INSERT INTO tenants (name, description, business, retriever_engines, status) SELECT '$$ADMIN_TENANT_NAME', 'Default admin workspace', '', '[]', 'active' WHERE NOT EXISTS (SELECT 1 FROM tenants WHERE name = '$$ADMIN_TENANT_NAME');"
         # 2. admin 用户：upsert by email（email UNIQUE），重复执行只会刷新密码/角色
         USER_ID=$(psql -h postgres -U "$$DB_USER" -d "$$DB_NAME" -tAc \
           "INSERT INTO users (username, email, password_hash, tenant_id, is_active, can_access_all_tenants, is_system_admin, preferences) VALUES ('$$ADMIN_USERNAME', '$$ADMIN_EMAIL', '$$ADMIN_PASSWORD_HASH', NULL, true, true, true, '{}') ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, is_active = true, is_system_admin = true, can_access_all_tenants = true RETURNING id;")
