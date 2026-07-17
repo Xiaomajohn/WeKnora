@@ -234,6 +234,62 @@ services:
     command: ["true"]
     restart: "no"
 
+  # ---------------------------------------------------------------------------
+  # 一次性初始化：在 WeKnora schema（users/tenants/tenant_members）已建好后，幂等地种入
+  # system admin 账号 + 默认空间 + owner 成员关系。镜像复用 WeKnora-postgres（已带 psql），
+  # 等待 app healthy，语义上参考 langfuse-db-init 容器，但依赖的是 app 健康而不是 langfuse profile，
+  # 默认随 docker compose up 一起跑。
+  #
+  # 未设置 ADMIN_USERNAME/EMAIL/PASSWORD_HASH（任何一项为空）则跳过，整个容器空跑成功。
+  # 重跑幂等：email 重用会更新密码；tenant 按 name NOT EXISTS 插入；tenant_members upsert 为 owner。
+  # ---------------------------------------------------------------------------
+  admin-init:
+    image: paradedb/paradedb:v0.22.2-pg17
+    container_name: WeKnora-admin-init
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${DB_PASSWORD}
+      DB_USER: ${DB_USER}
+      DB_NAME: ${DB_NAME}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+      ADMIN_TENANT_NAME: ${ADMIN_TENANT_NAME:-Admin Workspace}
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ -z "$$ADMIN_USERNAME" ] || [ -z "$$ADMIN_EMAIL" ] || [ -z "$$ADMIN_PASSWORD_HASH" ]; then
+          echo "[admin-init] ADMIN_USERNAME/EMAIL/PASSWORD_HASH not all set, skipping."
+          exit 0
+        fi
+        echo "[admin-init] ensuring admin '$$ADMIN_USERNAME' ($$ADMIN_EMAIL) and workspace '$$ADMIN_TENANT_NAME' exist in $$DB_NAME..."
+        psql_run() { psql -h postgres -U "$$DB_USER" -d "$$DB_NAME" -v ON_ERROR_STOP=0 -c "$$1"; }
+        # 1. 默认租户（name 非 UNIQUE，用 NOT EXISTS 保证幂等）
+        psql_run "INSERT INTO tenants (name, description, retriever_engines, status) SELECT '$$ADMIN_TENANT_NAME', 'Default admin workspace', '[]', 'active' WHERE NOT EXISTS (SELECT 1 FROM tenants WHERE name = '$$ADMIN_TENANT_NAME');"
+        # 2. admin 用户：upsert by email（email UNIQUE），重复执行只会刷新密码/角色
+        USER_ID=$(psql -h postgres -U "$$DB_USER" -d "$$DB_NAME" -tAc \
+          "INSERT INTO users (username, email, password_hash, tenant_id, is_active, can_access_all_tenants, is_system_admin, preferences) VALUES ('$$ADMIN_USERNAME', '$$ADMIN_EMAIL', '$$ADMIN_PASSWORD_HASH', NULL, true, true, true, '{}') ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, is_active = true, is_system_admin = true, can_access_all_tenants = true RETURNING id;")
+        if [ -z "$$USER_ID" ]; then
+          echo "[admin-init] failed to upsert admin user (no id returned)"
+          exit 1
+        fi
+        # 3. 把 user 加入默认租户为 owner（已有则升级为 owner）
+        TENANT_ID=$(psql -h postgres -U "$$DB_USER" -d "$$DB_NAME" -tAc "SELECT id FROM tenants WHERE name = '$$ADMIN_TENANT_NAME' LIMIT 1;")
+        if [ -z "$$TENANT_ID" ]; then
+          echo "[admin-init] failed to resolve tenant id"
+          exit 1
+        fi
+        psql_run "INSERT INTO tenant_members (user_id, tenant_id, role, status) VALUES ('$$USER_ID', $$TENANT_ID, 'owner', 'active') ON CONFLICT (user_id, tenant_id) DO UPDATE SET role = 'owner', status = 'active';"
+        # 4. 绑定 user.tenant_id 为默认空间（owner 的主空间；只填未填的）
+        psql_run "UPDATE users SET tenant_id = $$TENANT_ID WHERE id = '$$USER_ID' AND tenant_id IS NULL;"
+        echo "[admin-init] done. user_id=$$USER_ID tenant_id=$$TENANT_ID"
+    networks:
+      - WeKnora-network
+    restart: "no"
+
   docreader:
     image: wechatopenai/weknora-docreader:${WEKNORA_VERSION:-latest}
     build:
