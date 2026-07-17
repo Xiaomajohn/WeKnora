@@ -95,6 +95,13 @@ type User struct {
 	CanAccessAllTenants bool `json:"can_access_all_tenants" gorm:"default:false"`
 	// Whether the user is a system administrator (independent of workspace roles)
 	IsSystemAdmin bool `json:"is_system_admin" gorm:"default:false;index"`
+	// RegisteredViaInvite marks accounts created via share-link
+	// /auth/register-by-invite (TenantProvisioningTenantless). UI-only flag
+	// — see userService.Register for the sole write path. Surfaced through
+	// UserInfo so the SPA hides privileged settings entries (members /
+	// models / "all settings") for these accounts while leaving
+	// self-service, OIDC, and Lite auto-setup users untouched.
+	RegisteredViaInvite bool `json:"registered_via_invite" gorm:"default:false;not null"`
 	// Per-user UI/feature preferences (memory toggle, future knobs).
 	// Stored as JSON (jsonb on Postgres, TEXT on SQLite) via the
 	// driver.Valuer / sql.Scanner methods on UserPreferences.
@@ -239,14 +246,18 @@ type RegisterResponse struct {
 
 // UserInfo represents user information for API responses
 type UserInfo struct {
-	ID                  string          `json:"id"`
-	Username            string          `json:"username"`
-	Email               string          `json:"email"`
-	Avatar              string          `json:"avatar"`
-	TenantID            uint64          `json:"tenant_id"`
-	IsActive            bool            `json:"is_active"`
-	CanAccessAllTenants bool            `json:"can_access_all_tenants"`
-	IsSystemAdmin       bool            `json:"is_system_admin"`
+	ID                  string `json:"id"`
+	Username            string `json:"username"`
+	Email               string `json:"email"`
+	Avatar              string `json:"avatar"`
+	TenantID            uint64 `json:"tenant_id"`
+	IsActive            bool   `json:"is_active"`
+	CanAccessAllTenants bool   `json:"can_access_all_tenants"`
+	IsSystemAdmin       bool   `json:"is_system_admin"`
+	// RegisteredViaInvite mirrors User.RegisteredViaInvite; see that field
+	// for semantics. Surfaced here so the SPA can gate privileged settings
+	// entries on invite-created accounts without needing a separate fetch.
+	RegisteredViaInvite bool            `json:"registered_via_invite"`
 	Preferences         UserPreferences `json:"preferences"`
 	CreatedAt           time.Time       `json:"created_at"`
 	UpdatedAt           time.Time       `json:"updated_at"`
@@ -263,6 +274,7 @@ func (u *User) ToUserInfo() *UserInfo {
 		IsActive:            u.IsActive,
 		CanAccessAllTenants: u.CanAccessAllTenants,
 		IsSystemAdmin:       u.IsSystemAdmin,
+		RegisteredViaInvite: u.RegisteredViaInvite,
 		Preferences:         u.Preferences,
 		CreatedAt:           u.CreatedAt,
 		UpdatedAt:           u.UpdatedAt,

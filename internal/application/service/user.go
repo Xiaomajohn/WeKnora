@@ -174,6 +174,16 @@ func (s *userService) Register(ctx context.Context, req *types.RegisterRequest) 
 		user.TenantID = createdTenant.ID
 	}
 
+	// Flag accounts created via the share-link /auth/register-by-invite
+	// flow. Tenantless is the unique provisioning mode used by that path;
+	// self-service registration uses CreatePersonal, OIDC users go
+	// through provisionOIDCUser (also CreatePersonal), and Lite's
+	// AutoSetup is CreatePersonal too. UI-only gate; no API/route
+	// behavior depends on this flag.
+	if provisioning == types.TenantProvisioningTenantless {
+		user.RegisteredViaInvite = true
+	}
+
 	err = s.userRepo.CreateUser(ctx, user)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to create user: %v", err)

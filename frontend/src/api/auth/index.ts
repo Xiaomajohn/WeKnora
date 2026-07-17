@@ -20,6 +20,11 @@ export interface LoginResponse {
     tenant_id: number
     can_access_all_tenants?: boolean
     is_system_admin?: boolean
+    // True for accounts created via /auth/register-by-invite
+    // (TenantProvisioningTenantless). UI-only — the SPA hides privileged
+    // settings entries (members / models / "all settings") for these
+    // accounts. Not propagated to API calls.
+    registered_via_invite?: boolean
     is_active: boolean
     created_at: string
     updated_at: string
@@ -112,6 +117,11 @@ export interface UserInfo {
   can_access_all_tenants?: boolean
   preferences?: UserPreferences
   is_system_admin?: boolean
+  // True for accounts created via /auth/register-by-invite
+  // (TenantProvisioningTenantless). UI-only — the SPA hides privileged
+  // settings entries (members / models / "all settings") for these
+  // accounts. Not propagated to API calls.
+  registered_via_invite?: boolean
   created_at: string
   updated_at: string
 }
@@ -151,6 +161,9 @@ export function userInfoFromApi(
     tenant_id: String(tid) || '',
     can_access_all_tenants: u?.can_access_all_tenants === true,
     is_system_admin: u?.is_system_admin === true,
+    // Strict === true mirrors the is_system_admin / can_access_all_tenants
+    // treatment above — see comment block on the factory.
+    registered_via_invite: u?.registered_via_invite === true,
     preferences: u?.preferences,
     created_at: u?.created_at || new Date().toISOString(),
     updated_at: u?.updated_at || new Date().toISOString(),

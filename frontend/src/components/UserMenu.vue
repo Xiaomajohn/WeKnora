@@ -104,7 +104,12 @@
           <span>{{ $t('integrations.tabs.api') }}</span>
         </div>
         <div class="menu-divider"></div>
-        <div class="menu-item" @click="handleSettings">
+        <!--
+          「全部设置」入口对邀请注册（share-link）创建的用户隐藏。
+          superuser 豁免：即便他恰好也走 share-link 注册，
+          平台管理员仍可正常进入设置。
+        -->
+        <div v-if="!authStore.registeredViaInvite || authStore.canAccessAllTenants" class="menu-item" @click="handleSettings">
           <t-icon name="setting" class="menu-icon" />
           <span>{{ $t('general.allSettings') }}</span>
         </div>
@@ -256,8 +261,15 @@ const QUICKNAV_MIN_ROLE: Record<string, 'viewer' | 'contributor' | 'admin' | 'ow
   mcp: 'admin',
   'integration-api': 'owner',
 }
+// 邀请注册（share-link /auth/register-by-invite 创建的账号）禁止看到
+// 的 quickNav 项 —— 即便 invite 链接给了 owner 角色也不要显示，需求
+// 边界严格收在「成员管理」「模型管理」两个入口上。其它 quickNav
+// （websearch/mcp/integration-api）原本就要求 admin/owner，对同一群
+// 用户的现实影响微乎其微，不在本次需求范围。
+const QUICKNAV_INVITE_HIDDEN: ReadonlySet<string> = new Set(['members', 'models'])
 const canSeeQuickNav = (key: string): boolean => {
   if (authStore.canAccessAllTenants) return true
+  if (authStore.registeredViaInvite && QUICKNAV_INVITE_HIDDEN.has(key)) return false
   return authStore.hasRole(QUICKNAV_MIN_ROLE[key] ?? 'viewer')
 }
 

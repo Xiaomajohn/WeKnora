@@ -268,6 +268,12 @@ const SECTION_MIN_ROLE: Record<string, RoleKey> = {
 const SYSTEM_ADMIN_SECTIONS = new Set(['system-global', 'runtime-queues'])
 const INTEGRATION_SECTION_PREFIX = 'integration-'
 
+// 邀请注册（share-link /auth/register-by-invite 创建的账号）禁止
+// 进入的 section —— 即便 invite 链接给了 owner 角色也不要露入口，
+// 需求边界严格收在「成员管理」「模型管理」两项。与 UserMenu 的
+// QUICKNAV_INVITE_HIDDEN 保持一一对应，避免两个表漂移。
+const SECTION_INVITE_HIDDEN: ReadonlySet<string> = new Set(['members', 'models'])
+
 const integrationSectionKey = (tab: IntegrationTab) => `${INTEGRATION_SECTION_PREFIX}${tab}`
 
 const integrationTabFromSection = (section: string): IntegrationTab => {
@@ -296,6 +302,15 @@ const normalizeSettingsSection = (section: string) => {
 }
 
 const canSeeSection = (key: string): boolean => {
+  // 邀请注册用户：隐藏 members / models 两个 section。
+  // superuser（canAccessAllTenants）豁免，避免平台管理员被这条规则误伤。
+  if (
+    authStore.registeredViaInvite &&
+    !authStore.canAccessAllTenants &&
+    SECTION_INVITE_HIDDEN.has(key)
+  ) {
+    return false
+  }
   if (isIntegrationSection(key)) {
     const min = INTEGRATION_TAB_MIN_ROLE[integrationTabFromSection(key)]
     if (!min) return true

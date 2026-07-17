@@ -120,6 +120,24 @@ export const useAuthStore = defineStore('auth', () => {
     return user.value?.is_system_admin === true
   })
 
+  // registeredViaInvite marks accounts that were created via the
+  // /auth/register-by-invite share-link flow (server-side
+  // TenantProvisioningTenantless). It is independent of role: even a
+  // tenant-relative Owner who happens to also have gone through the
+  // invite flow will be flagged.
+  //
+  // The SPA uses this to hide privileged settings entries (members,
+  // models, "all settings") for these accounts. The flag is purely
+  // cosmetic on the client — every API endpoint still enforces its own
+  // authorisation — so a user with DevTools skills who toggles this
+  // back on can see the menu items but will receive a 403 from the
+  // server on the first call. This matches the security posture of
+  // every other auth-store flag (isSystemAdmin / canAccessAllTenants /
+  // currentTenantRole).
+  const registeredViaInvite = computed(() => {
+    return user.value?.registered_via_invite === true
+  })
+
   // currentTenantRole returns the user's role in the active tenant
   // (defaulting to '' when memberships have not been loaded). Used by
   // role-aware UI gating; PR 2 wires backend enforcement, PR 3 uses
@@ -544,6 +562,7 @@ export const useAuthStore = defineStore('auth', () => {
     currentUserId,
     canAccessAllTenants,
     isSystemAdmin,
+    registeredViaInvite,
     currentTenantRole,
     hasRole,
     effectiveTenantId,

@@ -277,6 +277,10 @@ CREATE TABLE IF NOT EXISTS users (
     tenant_id INTEGER,
     is_active BOOLEAN NOT NULL DEFAULT 1,
     can_access_all_tenants BOOLEAN NOT NULL DEFAULT 0,
+    -- Set by /auth/register-by-invite (TenantProvisioningTenantless). UI-only flag
+    -- used to hide privileged settings entries (members / models / "all settings")
+    -- for share-link created accounts. See userService.Register.
+    registered_via_invite BOOLEAN NOT NULL DEFAULT 0,
     -- Per-user JSON preferences (memory toggle, future UI knobs).
     -- SQLite has no JSONB; store as TEXT and let GORM (de)serialise via
     -- the driver.Valuer / sql.Scanner methods on types.UserPreferences.
