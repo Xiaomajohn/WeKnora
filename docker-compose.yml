@@ -719,7 +719,7 @@ services:
       # 9100：S3 API（浏览器上传媒体时会直连此端口，必须对外暴露）
       - "${LANGFUSE_MINIO_S3_PORT:-9100}:9000"
       # 9101：MinIO 控制台（可选，方便排障）
-      - "${LANGFUSE_MINIO_CONSOLE_PORT:-9101}:9001"
+      - "${LANGFUSE_MINIO_CONSOLE_PORT:-19101}:9001"
     volumes:
       - langfuse_minio_data:/data
     healthcheck:
