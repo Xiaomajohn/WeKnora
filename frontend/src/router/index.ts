@@ -132,7 +132,7 @@ const router = createRouter({
           path: "agents",
           name: "agentList",
           component: () => import("../views/agent/AgentList.vue"),
-          meta: { requiresInit: true, requiresAuth: true }
+          meta: { requiresInit: true, requiresAuth: true, inviteHidden: true }
         },
         {
           path: "integrations",
@@ -389,6 +389,19 @@ router.beforeEach(async (to, from, next) => {
   // the bounce. This is UI-only; the server enforces the real check.
   if (to.meta.requiresSystemAdmin === true) {
     if (!authStore.isSystemAdmin) {
+      next('/platform/knowledge-bases')
+      return
+    }
+  }
+
+  // 「inviteHidden」路由 gate —— 与侧栏 nav、UserMenu quicknav 的隐藏策略对齐。
+  // UI 入口藏起来之后还要挡住 invite 注册用户手输 URL 的 deep link（侧栏 nav
+  // 不渲染不能阻止直接访问路由）。该 gate 在认证 / 初始化 / requiresSystemAdmin
+  // 之后执行，确保 invite + 非超管的直接访问被重定向到知识库列表页（这是他们
+  // 仍被允许的主页）。纯前端 gate，后端仍以自身 RBAC 为准（见项目策略：
+  // 「权限控制策略：纯前端实现」）。
+  if (to.meta.inviteHidden === true) {
+    if (authStore.registeredViaInvite && !authStore.canAccessAllTenants) {
       next('/platform/knowledge-bases')
       return
     }

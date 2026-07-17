@@ -103,16 +103,19 @@
           <t-icon name="secured" class="menu-icon" />
           <span>{{ $t('integrations.tabs.api') }}</span>
         </div>
-        <div class="menu-divider"></div>
         <!--
           「全部设置」入口对邀请注册（share-link）创建的用户隐藏。
           superuser 豁免：即便他恰好也走 share-link 注册，
           平台管理员仍可正常进入设置。
+          —— 分隔线一同条件化，避免 invite 用户下拉里出现孤立横线。
         -->
-        <div v-if="!authStore.registeredViaInvite || authStore.canAccessAllTenants" class="menu-item" @click="handleSettings">
-          <t-icon name="setting" class="menu-icon" />
-          <span>{{ $t('general.allSettings') }}</span>
-        </div>
+        <template v-if="!authStore.registeredViaInvite || authStore.canAccessAllTenants">
+          <div class="menu-divider"></div>
+          <div class="menu-item" @click="handleSettings">
+            <t-icon name="setting" class="menu-icon" />
+            <span>{{ $t('general.allSettings') }}</span>
+          </div>
+        </template>
         <!--
           System administration entry — visible only to users with the
           platform-wide is_system_admin flag. Hidden for everyone else,
@@ -123,26 +126,28 @@
           <t-icon name="server" class="menu-icon" />
           <span>{{ $t('settings.system') }}</span>
         </div>
-        <!-- 切换空间入口在下拉「当前空间」区块 hover；此处仅为分隔线与菜单项。 -->
-        <div class="menu-divider"></div>
+        <!-- 切换空间入口在下拉「当前空间」区块 hover；此处仅为菜单项。 -->
         <!--
           GitHub 入口对邀请注册（share-link /auth/register-by-invite 创建的账号）隐藏，
           与「全部设置」入口策略对齐 —— 需求边界同样收在这一群「外部 / 配置类」
           项上，邀请注册进来的非管理员用户不应在主菜单里看到这一列。
           superuser（canAccessAllTenants）依旧豁免。
+          —— 分隔线一同条件化，避免 invite 用户下拉里出现孤立横线。
         -->
-        <div v-if="!authStore.registeredViaInvite || authStore.canAccessAllTenants" class="menu-item"
-          :title="$t('common.githubStarTip')" @click="openGithub">
-          <t-icon name="logo-github" class="menu-icon" />
-          <span class="menu-text-with-icon">
-            <span>{{ $t('common.github') }}</span>
-            <t-icon name="star-filled" class="menu-github-star-icon" size="16px" aria-hidden="true" />
-            <svg class="menu-external-icon" viewBox="0 0 16 16" aria-hidden="true">
-              <path fill="currentColor"
-                d="M12.667 8a.667.667 0 0 1 .666.667v4a2.667 2.667 0 0 1-2.666 2.666H4.667a2.667 2.667 0 0 1-2.667-2.666V5.333a2.667 2.667 0 0 1 2.667-2.666h4a.667.667 0 1 1 0 1.333h-4a1.333 1.333 0 0 0-1.333 1.333v7.334A1.333 1.333 0 0 0 4.667 13.333h6a1.333 1.333 0 0 0 1.333-1.333v-4A.667.667 0 0 1 12.667 8Zm2.666-6.667v4a.667.667 0 0 1-1.333 0V3.276l-5.195 5.195a.667.667 0 0 1-.943-.943l5.195-5.195h-2.057a.667.667 0 0 1 0-1.333h4a.667.667 0 0 1 .666.666Z" />
-            </svg>
-          </span>
-        </div>
+        <template v-if="!authStore.registeredViaInvite || authStore.canAccessAllTenants">
+          <div class="menu-divider"></div>
+          <div class="menu-item" :title="$t('common.githubStarTip')" @click="openGithub">
+            <t-icon name="logo-github" class="menu-icon" />
+            <span class="menu-text-with-icon">
+              <span>{{ $t('common.github') }}</span>
+              <t-icon name="star-filled" class="menu-github-star-icon" size="16px" aria-hidden="true" />
+              <svg class="menu-external-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <path fill="currentColor"
+                  d="M12.667 8a.667.667 0 0 1 .666.667v4a2.667 2.667 0 0 1-2.666 2.666H4.667a2.667 2.667 0 0 1-2.667-2.666V5.333a2.667 2.667 0 0 1 2.667-2.666h4a.667.667 0 1 1 0 1.333h-4a1.333 1.333 0 0 0-1.333 1.333v7.334A1.333 1.333 0 0 0 4.667 13.333h6a1.333 1.333 0 0 0 1.333-1.333v-4A.667.667 0 0 1 12.667 8Zm2.666-6.667v4a.667.667 0 0 1-1.333 0V3.276l-5.195 5.195a.667.667 0 0 1-.943-.943l5.195-5.195h-2.057a.667.667 0 0 1 0-1.333h4a.667.667 0 0 1 .666.666Z" />
+              </svg>
+            </span>
+          </div>
+        </template>
         <template v-if="!authStore.isLiteMode">
           <div class="menu-divider"></div>
           <div class="menu-item danger" @click="handleLogout">
