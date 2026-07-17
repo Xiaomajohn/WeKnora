@@ -125,7 +125,14 @@
         </div>
         <!-- 切换空间入口在下拉「当前空间」区块 hover；此处仅为分隔线与菜单项。 -->
         <div class="menu-divider"></div>
-        <div class="menu-item" :title="$t('common.githubStarTip')" @click="openGithub">
+        <!--
+          GitHub 入口对邀请注册（share-link /auth/register-by-invite 创建的账号）隐藏，
+          与「全部设置」入口策略对齐 —— 需求边界同样收在这一群「外部 / 配置类」
+          项上，邀请注册进来的非管理员用户不应在主菜单里看到这一列。
+          superuser（canAccessAllTenants）依旧豁免。
+        -->
+        <div v-if="!authStore.registeredViaInvite || authStore.canAccessAllTenants" class="menu-item"
+          :title="$t('common.githubStarTip')" @click="openGithub">
           <t-icon name="logo-github" class="menu-icon" />
           <span class="menu-text-with-icon">
             <span>{{ $t('common.github') }}</span>
