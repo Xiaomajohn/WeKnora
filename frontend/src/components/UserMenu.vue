@@ -315,6 +315,23 @@ const toggleMenu = () => {
 
 // 快捷导航到设置的特定部分
 const handleQuickNav = (section: string) => {
+  // 「网络搜索」「MCP 服务」对邀请注册（share-link）账号在 click 处拦截：
+  // 入口仍然展示以避免菜单出现孤立的 item / divider 拼合问题，但点击
+  // 后不跳转到具体 section，直接弹无权限提示让 invite 用户知道要联系
+  // 管理员。superuser 依旧正常跳转。其它 quicknav（members / models）
+  // 在 canSeeQuickNav 处已经隐藏了入口，这里不再二次判断。
+  if (
+    (section === 'websearch' || section === 'mcp') &&
+    authStore.registeredViaInvite &&
+    !authStore.canAccessAllTenants
+  ) {
+    menuVisible.value = false
+    MessagePlugin.warning({
+      content: t('settings.inviteRestricted.desc'),
+      title: t('settings.inviteRestricted.title'),
+    })
+    return
+  }
   menuVisible.value = false
   uiStore.openSettings()
   if (section === 'integration-api') {

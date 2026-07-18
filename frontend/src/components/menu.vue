@@ -423,16 +423,10 @@ const getIconActiveState = (itemPath: string) => {
 };
 
 // 分离上下两部分菜单（使用 visibleMenuArr 以便 lite 模式过滤 logout）
-// 「智能体」侧栏入口对邀请注册（share-link /auth/register-by-invite 创建的账号）
-// 隐藏 —— 与 UserMenu 里「成员管理」「全部设置」「GitHub」的隐藏策略对齐；
-// 需求边界不要求 invite 账号访问 /platform/agents。superuser 依旧可见。
-const _isInvitedForAgentMenu = computed(() => authStore.registeredViaInvite && !authStore.canAccessAllTenants)
 const topMenuItems = computed<MenuItem[]>(() => {
     return (visibleMenuArr.value as unknown as MenuItem[]).filter((item: MenuItem) => {
         const isTopItem = item.path === 'knowledge-bases' || item.path === 'agents' || item.path === 'organizations' || item.path === 'creatChat'
-        if (!isTopItem) return false
-        if (_isInvitedForAgentMenu.value && item.path === 'agents') return false
-        return true
+        return isTopItem
     });
 });
 
@@ -1080,6 +1074,17 @@ const handleMenuClick = async (path: string) => {
             router.push('/platform/knowledge-bases')
         }
     } else if (path === 'agents') {
+        // 「智能体」入口对邀请注册（share-link）账号在 click 处拦截：
+        // 菜单保持可见以避免打扰 UI 节奏，但点击后不进入列表页，直接
+        // 弹一个无权限提示，让 invite 用户知道要联系管理员才能用。
+        // superuser 依旧正常进入路由。
+        if (authStore.registeredViaInvite && !authStore.canAccessAllTenants) {
+            MessagePlugin.warning({
+                content: t('settings.inviteRestricted.desc'),
+                title: t('settings.inviteRestricted.title'),
+            })
+            return
+        }
         router.push('/platform/agents')
     } else if (path === 'organizations') {
         // 组织菜单项：跳转到组织列表

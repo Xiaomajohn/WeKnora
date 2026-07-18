@@ -1099,6 +1099,10 @@ export default {
     roleDenied: {
       title: "权限不足",
       desc: "你当前的角色无权访问此设置项。请联系本空间的管理员获取所需角色。",
+    },
+    inviteRestricted: {
+      title: "权限受限",
+      desc: "请联系管理员开启该功能。",
     },    weknoraCloud: {
       title: "WeKnora Cloud",
       description: "配置 WeKnora Cloud 的 APPID 和 APPSECRET 凭证。凭证用于模型服务和文档解析引擎。",

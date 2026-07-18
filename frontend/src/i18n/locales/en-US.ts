@@ -1233,6 +1233,10 @@ export default {
       title: 'Insufficient permissions',
       desc: "Your role can't access this settings page. Ask an admin of this workspace to grant the required role.",
     },
+    inviteRestricted: {
+      title: 'Permission restricted',
+      desc: 'Contact your administrator to enable this feature.',
+    },
     weknoraCloud: {
       title: 'WeKnora Cloud',
       description: 'Configure WeKnora Cloud APPID and APPSECRET credentials. Credentials are used for model services and document parsing engine.',
