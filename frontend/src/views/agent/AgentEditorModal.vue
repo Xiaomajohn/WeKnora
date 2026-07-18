@@ -3251,6 +3251,12 @@ const loadDependencies = async () => {
 
 // 跳转到模型管理页面添加模型
 const handleAddModel = (subSection: string) => {
+  // 链接注册用户一律不可添加模型（即使被提权到 admin / owner），与
+  // ModelSettings.vue 的 SECTION_INVITE_HIDDEN 行为对齐。
+  if (authStore.registeredViaInvite) {
+    MessagePlugin.warning(t('common.noPermission'));
+    return;
+  }
   uiStore.openSettings('models', subSection);
 };
 

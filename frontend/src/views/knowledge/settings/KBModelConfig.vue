@@ -83,7 +83,9 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { MessagePlugin } from 'tdesign-vue-next'
 import { useUIStore } from '@/stores/ui'
+import { useAuthStore } from '@/stores/auth'
 import ModelSelector from '@/components/ModelSelector.vue'
 import { useI18n } from 'vue-i18n'
 
@@ -109,6 +111,7 @@ const emit = defineEmits<{
 }>()
 
 const uiStore = useUIStore()
+const authStore = useAuthStore()
 const { t } = useI18n()
 
 const llmSelectorRef = ref<InstanceType<typeof ModelSelector>>()
@@ -136,6 +139,12 @@ const handleWikiModelChange = (modelId: string) => {
 }
 
 const handleAddModel = (subSection: string) => {
+  // 链接注册用户一律不可添加模型（即使被提权到 admin / owner），与
+  // ModelSettings.vue 的 SECTION_INVITE_HIDDEN 行为对齐。
+  if (authStore.registeredViaInvite) {
+    MessagePlugin.warning(t('common.noPermission'))
+    return
+  }
   uiStore.openSettings('models', subSection)
 }
 </script>

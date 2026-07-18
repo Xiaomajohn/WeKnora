@@ -1920,6 +1920,7 @@ export default {
     retry: "重试",
     expand: "展开",
     collapse: "收起",
+    noPermission: "您没有权限执行该操作",
   },
   mentionDetail: {
     faqCount: "共 {count} 条问答",
@@ -3809,6 +3810,8 @@ export default {
       namePlaceholder: "请输入知识库名称",
       descriptionLabel: "知识库描述",
       descriptionPlaceholder: "请输入知识库描述（可选）",
+      // 链接注册用户的精简创建弹窗底部提示文案。
+      basicCreateTip: "创建后可在知识库详情页继续配置模型、向量库、分块策略等高级选项",
     },
     wiki: {
       title: "Wiki 设置",

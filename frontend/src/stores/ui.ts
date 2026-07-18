@@ -7,6 +7,10 @@ export const useUIStore = defineStore('ui', {
     kbEditorMode: 'create' as 'create' | 'edit',
     currentKBId: null as string | null,
     kbEditorType: 'document' as 'document' | 'faq',
+    // 链接注册用户的精简创建弹窗（仅"基本信息"区块）。
+    // 与原 showKBEditorModal 互不冲突，分别独立挂载。
+    showCreateBasicKBModal: false,
+    createBasicKBType: 'document' as 'document' | 'faq',
     // 当前选中的标签 ID，用于文件上传时传递
     selectedTagIds: [] as string[],
     kbEditorInitialSection: null as string | null,
@@ -58,6 +62,15 @@ export const useUIStore = defineStore('ui', {
       this.kbEditorType = type
       this.kbEditorInitialSection = initialSection || null
       this.showKBEditorModal = true
+    },
+
+    openCreateBasicKB(type: 'document' | 'faq' = 'document') {
+      this.createBasicKBType = type
+      this.showCreateBasicKBModal = true
+    },
+
+    closeCreateBasicKB() {
+      this.showCreateBasicKBModal = false
     },
 
     closeKBEditor() {

@@ -26,9 +26,11 @@
         </div>
       </t-option>
       
-      <!-- 添加模型选项（在底部） -->
+      <!-- 添加模型选项（在底部）-->
+      <!-- 链接注册用户（registered_via_invite=true）一律不可见，与
+           ModelsSettings.vue 的 SECTION_INVITE_HIDDEN 行为对齐。 -->
       <t-option
-        v-if="!disabled"
+        v-if="!disabled && !authStore.registeredViaInvite"
         value="__add_model__"
         class="add-model-option"
       >
@@ -46,6 +48,9 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { listModels, type ModelConfig } from '@/api/model'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useI18n } from 'vue-i18n'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
 
 interface Props {
   modelType: 'KnowledgeQA' | 'Embedding' | 'Rerank' | 'VLLM' | 'ASR'

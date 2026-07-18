@@ -703,6 +703,10 @@
       :kb-id="uiStore.currentKBId || undefined" :initial-type="uiStore.kbEditorType"
       @update:visible="(val) => val ? null : uiStore.closeKBEditor()" @success="handleKBEditorSuccess" />
 
+    <!-- 链接注册用户的精简创建弹窗（仅基本信息） -->
+    <KBCreateBasic :visible="uiStore.showCreateBasicKBModal" :kb-type="uiStore.createBasicKBType"
+      @update:visible="(val) => val ? null : uiStore.closeCreateBasicKB()" @success="handleKBEditorSuccess" />
+
     <!-- 共享知识库对话框 -->
     <ShareKnowledgeBaseDialog v-model:visible="shareDialogVisible" :knowledge-base-id="sharingKbId"
       :knowledge-base-name="sharingKbName" @shared="handleShareSuccess" />
@@ -792,6 +796,7 @@ import { useOrganizationStore } from '@/stores/organization'
 import { listOrganizationSharedKnowledgeBases, type SharedKnowledgeBase, type OrganizationSharedKnowledgeBaseItem, type SourceFromAgentInfo } from '@/api/organization'
 import { mergeAllScopeKnowledgeBases, type OwnedKnowledgeBase, type SharedKnowledgeBaseLike } from './kbListMerge'
 import KnowledgeBaseEditorModal from './KnowledgeBaseEditorModal.vue'
+import KBCreateBasic from './KBCreateBasic.vue'
 import KbWikiBadge from './components/KbWikiBadge.vue'
 import ShareKnowledgeBaseDialog from '@/components/ShareKnowledgeBaseDialog.vue'
 import ListSpaceSidebar from '@/components/ListSpaceSidebar.vue'
@@ -1694,6 +1699,11 @@ const goSettings = (id: string) => {
 // 创建知识库
 const handleCreateKnowledgeBase = () => {
   markContextualGuideDone('kbList')
+  // 链接注册用户：走精简弹窗（仅基本信息），不允许添加模型 / 配置向量库等
+  if (authStore.registeredViaInvite) {
+    uiStore.openCreateBasicKB('document')
+    return
+  }
   // 无模型时仍打开创建向导，并定位到模型配置页；用户可在向导内添加模型，无需先跳转系统设置
   const initialSection =
     modelsReadyLoaded.value && !isReadyForDocumentKb.value ? 'models' : undefined

@@ -2061,6 +2061,7 @@ export default {
     retry: 'Retry',
     expand: 'Expand',
     collapse: 'Collapse',
+    noPermission: 'You do not have permission to perform this operation',
   },
   mentionDetail: {
     readOnlyFromAgent: 'Read-only in this conversation; not shown in Knowledge Base list',
@@ -2574,7 +2575,9 @@ export default {
       nameLabel: 'Knowledge Base Name',
       namePlaceholder: 'Enter knowledge base name',
       descriptionLabel: 'Knowledge Base Description',
-      descriptionPlaceholder: 'Enter knowledge base description (optional)'
+      descriptionPlaceholder: 'Enter knowledge base description (optional)',
+      // Tip at the bottom of the simplified create modal for invite-registered users.
+      basicCreateTip: 'After creation, you can continue configuring models, vector store, chunking strategy and other advanced options in the knowledge base detail page'
     },
     wiki: {
       title: 'Wiki Settings',

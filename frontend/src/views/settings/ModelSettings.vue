@@ -118,7 +118,7 @@
           </div>
         </div>
         <button
-          v-if="authStore.hasRole('admin')"
+          v-if="authStore.hasRole('admin') && !authStore.registeredViaInvite"
           type="button"
           class="model-card model-card--add"
           data-guide="settings-add-model"
