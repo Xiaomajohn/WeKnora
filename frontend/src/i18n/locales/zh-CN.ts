@@ -52,12 +52,12 @@ export default {
     reopen: "新手引导",
     steps: {
       welcome: {
-        title: "欢迎使用 WeKnora",
+        title: "欢迎使用 {brandName}",
         desc: "只需几步，带你快速了解知识库、对话与智能体的核心用法。点击「下一步」开始。",
       },
       knowledge: {
         title: "创建你的知识库",
-        desc: "知识库是一切的起点：上传文档、网页或 FAQ，WeKnora 会自动解析并建立索引。点击这里进入知识库。",
+        desc: "知识库是一切的起点：上传文档、网页或 FAQ，{brandName} 会自动解析并建立索引。点击这里进入知识库。",
       },
       chat: {
         title: "发起智能对话",

@@ -3,7 +3,7 @@
         <!-- 展开时：Logo + 搜索/折叠按钮同行 -->
         <div class="logo_row" v-if="!uiStore.sidebarCollapsed">
             <div class="logo_box" @click="router.push('/platform/knowledge-bases')" style="cursor: pointer;">
-                <img class="logo" src="@/assets/img/weknora.png" alt="">
+                <span class="logo-text">{{ BRAND_NAME }}</span>
                 <sup v-if="isLiteEdition" class="lite-badge">Lite</sup>
             </div>
             <div class="logo_actions">
@@ -247,6 +247,7 @@ import { useCommandPaletteStore } from '@/stores/commandPalette';
 import { MessagePlugin, DialogPlugin, Icon as TIcon } from "tdesign-vue-next";
 import UserMenu from '@/components/UserMenu.vue';
 import TenantSelector from '@/components/TenantSelector.vue';
+import { BRAND_NAME } from '@/utils';
 import { useI18n } from 'vue-i18n';
 import { getSystemInfo } from '@/api/system';
 
@@ -1285,9 +1286,15 @@ const onDragHandleMouseDown = (e: MouseEvent) => {
         min-width: 0;
         overflow: hidden;
 
-        .logo {
-            width: 128px;
-            height: auto;
+        .logo-text {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--td-brand-color-active, #07C05F);
+            letter-spacing: 0.3px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            line-height: 1.2;
         }
 
         .lite-badge {

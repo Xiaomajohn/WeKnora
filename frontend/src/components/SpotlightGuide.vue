@@ -53,6 +53,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SpotlightGuideStep } from '@/types/spotlightGuide'
+import { BRAND_NAME } from '@/utils'
 
 const CARD_WIDTH = 340
 const GAP = 16
@@ -151,8 +152,11 @@ let retryTimer: ReturnType<typeof setTimeout> | null = null
 
 const step = computed(() => props.steps[index.value] ?? props.steps[0])
 const isLast = computed(() => index.value === props.steps.length - 1)
-const stepTitle = computed(() => t(`${props.stepI18nPrefix}.${step.value.key}.title`))
-const stepDesc = computed(() => t(`${props.stepI18nPrefix}.${step.value.key}.desc`))
+// 占位符常量：{brandName} 替换为环境变量 BRAND_NAME，便于"内部部署"场景
+// 把欢迎语和说明里的"WeKnora"统一改为内部品牌名（如"Tiandy知识库"）。
+const guideI18nValues = { brandName: BRAND_NAME }
+const stepTitle = computed(() => t(`${props.stepI18nPrefix}.${step.value.key}.title`, guideI18nValues))
+const stepDesc = computed(() => t(`${props.stepI18nPrefix}.${step.value.key}.desc`, guideI18nValues))
 
 const hole = computed(() => {
   const el = targetEl.value

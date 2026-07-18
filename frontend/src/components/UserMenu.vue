@@ -134,7 +134,7 @@
           superuser（canAccessAllTenants）依旧豁免。
           —— 分隔线一同条件化，避免 invite 用户下拉里出现孤立横线。
         -->
-        <template v-if="!authStore.registeredViaInvite || authStore.canAccessAllTenants">
+        <template v-if="(!authStore.registeredViaInvite || authStore.canAccessAllTenants) && SHOW_GITHUB_LINK">
           <div class="menu-divider"></div>
           <div class="menu-item" :title="$t('common.githubStarTip')" @click="openGithub">
             <t-icon name="logo-github" class="menu-icon" />
@@ -233,6 +233,7 @@ import type { TenantInfo } from '@/api/tenant'
 import { useRoleLabel, useHomeTenant } from '@/composables/useRoleLabel'
 import { getRootZoom, rectToCssPx, cssViewportSize } from '@/utils/zoom'
 import { openNewUserGuide } from '@/config/contextualGuides'
+import { BRAND_GITHUB_URL, SHOW_GITHUB_LINK } from '@/utils'
 
 const { t } = useI18n()
 
@@ -554,7 +555,7 @@ const reopenGuide = () => {
 // 打开 GitHub
 const openGithub = () => {
   menuVisible.value = false
-  window.open('https://github.com/Tencent/WeKnora', '_blank')
+  window.open(BRAND_GITHUB_URL, '_blank')
 }
 
 // 注销
