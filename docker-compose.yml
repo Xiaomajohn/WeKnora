@@ -1,6 +1,8 @@
 services:
   frontend:
-    image: wechatopenai/weknora-ui:${WEKNORA_VERSION:-latest}
+    # image: wechatopenai/weknora-ui:${WEKNORA_VERSION:-latest}
+    # ⚠️ 必须注释掉 image 行，否则 docker compose up 会优先拉远程镜像，
+    # 本地 build（含修改后的 docker-entrypoint.sh / .env 注入逻辑）不会生效。
     # Requires frontend/dist — run ./scripts/build_frontend_dist.sh before --build
     build:
       context: ./frontend
