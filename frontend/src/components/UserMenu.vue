@@ -40,7 +40,16 @@
           <div class="dropdown-user-meta">
             <div class="dropdown-user-name-row">
               <span class="dropdown-user-name">{{ userName }}</span>
-              <t-tooltip :content="$t('newUserGuide.reopen')" placement="top">
+              <!--
+                「新手引导」入口对邀请注册（share-link /auth/register-by-invite 创建的账号）隐藏，
+                与「全部设置」「GitHub」入口策略对齐 —— 这一群「外部 / 配置类」入口
+                对 invite 用户一并屏蔽，避免在已精简的下拉里再冒出一个看似无关
+                的 "?" 帮助按钮。同时该按钮引导里包含模型/智能体等配置项入口，
+                同样不在 invite 用户的操作边界内。
+                superuser（canAccessAllTenants）依旧豁免。
+              -->
+              <t-tooltip v-if="!authStore.registeredViaInvite || authStore.canAccessAllTenants"
+                :content="$t('newUserGuide.reopen')" placement="top">
                 <button type="button" class="dropdown-guide-btn" :aria-label="$t('newUserGuide.reopen')"
                   @click.stop="reopenGuide">
                   <t-icon name="help-circle" size="14px" />
