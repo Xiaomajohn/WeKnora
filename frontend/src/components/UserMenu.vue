@@ -41,14 +41,23 @@
             <div class="dropdown-user-name-row">
               <span class="dropdown-user-name">{{ userName }}</span>
               <!--
-                「新手引导」入口对邀请注册（share-link /auth/register-by-invite 创建的账号）隐藏，
-                与「全部设置」「GitHub」入口策略对齐 —— 这一群「外部 / 配置类」入口
-                对 invite 用户一并屏蔽，避免在已精简的下拉里再冒出一个看似无关
-                的 "?" 帮助按钮。同时该按钮引导里包含模型/智能体等配置项入口，
-                同样不在 invite 用户的操作边界内。
-                superuser（canAccessAllTenants）依旧豁免。
+                「新手引导」入口对邀请注册（share-link /auth/register-by-invite
+                创建的账号）一律隐藏 —— 不论后续是否被提升为 admin / 跨租户
+                superuser 都不豁免。
+
+                新手指引的 models / settings 步骤指向「添加模型」「账户设
+                置」等入口，这些入口本身在 invite 用户视角下都被严格屏蔽
+                （ModelSelector.vue / ModelSettings.vue 等均无条件走
+                registeredViaInvite 隔离，连 superuser 都不豁免）；让
+                invite 用户重新打开新手指引最终会卡在不允许访问的步骤
+                上，体验不一致。
+
+                这里特意与同文件的「全部设置」「GitHub」入口策略脱钩——
+                那两个入口保留 superuser 豁免是因为它们本身是单点跳转，
+                跳转过去页面有独立的 role gate；而新手引导是「串场」
+                体验，会把所有被禁的入口串成一个连贯链路，必须整体屏蔽。
               -->
-              <t-tooltip v-if="!authStore.registeredViaInvite || authStore.canAccessAllTenants"
+              <t-tooltip v-if="!authStore.registeredViaInvite"
                 :content="$t('newUserGuide.reopen')" placement="top">
                 <button type="button" class="dropdown-guide-btn" :aria-label="$t('newUserGuide.reopen')"
                   @click.stop="reopenGuide">
