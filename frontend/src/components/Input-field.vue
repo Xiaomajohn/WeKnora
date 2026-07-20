@@ -7,6 +7,7 @@ import { MessagePlugin } from "tdesign-vue-next";
 import { useSettingsStore } from '@/stores/settings';
 import { useUIStore } from '@/stores/ui';
 import { useMenuStore } from '@/stores/menu';
+import { useAuthStore } from '@/stores/auth';
 import { listKnowledgeBases, searchKnowledge, batchQueryKnowledge, listKnowledgeTags } from '@/api/knowledge-base';
 import { listMCPServices, type MCPService } from '@/api/mcp-service';
 import { stopSession } from '@/api/chat';
@@ -49,6 +50,7 @@ const settingsStore = useSettingsStore();
 const uiStore = useUIStore();
 const orgStore = useOrganizationStore();
 const menuStore = useMenuStore();
+const authStore = useAuthStore();
 const chatResources = useChatResourcesStore();
 const editorResources = useEditorResourcesStore();
 const {
@@ -996,6 +998,13 @@ const handleModelChange = (value: string | number | Array<string | number> | und
     return;
   }
   if (val === '__add_model__') {
+    // 链接注册用户一律不可添加模型（即使被提权到 admin / owner），
+    // 与 ModelSelector.vue / ModelSettings.vue 的行为对齐。
+    if (authStore.registeredViaInvite) {
+      MessagePlugin.warning(t('common.noPermission'));
+      showModelSelector.value = false;
+      return;
+    }
     selectedModelId.value = readLastChatModelID();
     handleGoToConversationModels();
     return;
@@ -2006,6 +2015,13 @@ const updateAgentModeDropdownPosition = () => {
 };
 
 const toggleAgentModeSelector = () => {
+  // 链接注册用户一律不可选择智能体（即使被提权到 admin / owner），
+  // 与 menu.vue 中「智能体」菜单的拦截逻辑保持一致。
+  if (authStore.registeredViaInvite) {
+    MessagePlugin.warning(t('common.noPermission'));
+    return;
+  }
+
   // 互斥
   showMention.value = false;
   showModelSelector.value = false;
@@ -2617,7 +2633,9 @@ defineExpose({
             <div class="model-selector-dropdown" :style="modelDropdownStyle" @click.stop>
               <div class="model-selector-header">
                 <span>{{ $t('conversationSettings.models.chatGroupLabel') }}</span>
-                <button class="model-selector-add" type="button" @click="handleModelChange('__add_model__')">
+                <!-- 链接注册用户一律不可添加模型（即使被提权到 admin / owner），
+                     与 ModelSelector.vue / ModelSettings.vue 的行为对齐。 -->
+                <button v-if="!authStore.registeredViaInvite" class="model-selector-add" type="button" @click="handleModelChange('__add_model__')">
                   <span class="add-icon">+</span>
                   <span class="add-text">{{ $t('input.addModel') }}</span>
                 </button>

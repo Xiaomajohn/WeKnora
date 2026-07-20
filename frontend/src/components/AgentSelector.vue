@@ -4,7 +4,12 @@
       <div class="agent-selector-dropdown" :style="dropdownStyle" @click.stop>
         <div class="agent-selector-header">
           <span>{{ $t('agent.selectAgent') }}</span>
-          <router-link to="/platform/agents" class="agent-selector-add" @click="$emit('close')">
+          <!--
+            「+ 管理」入口对邀请注册（share-link /auth/register-by-invite 创建的账号）一律隐藏。
+            即便后续被提升为 admin / 跨租户 superuser 也不豁免，与 ModelSelector.vue
+            「+ 添加模型」按钮的策略对齐：链接用户只允许「使用」，不允许「配置」。
+          -->
+          <router-link v-if="!authStore.registeredViaInvite" to="/platform/agents" class="agent-selector-add" @click="$emit('close')">
             <span class="add-icon">+</span>
             <span class="add-text">{{ $t('agent.manageAgents') }}</span>
           </router-link>
@@ -36,8 +41,8 @@
             </div>
           </div>
 
-          <!-- 自定义智能体 -->
-          <div v-if="customAgents.length > 0" class="agent-group">
+          <!-- 自定义智能体（链接注册用户一律不可见，与菜单/添加模型策略一致） -->
+          <div v-if="!authStore.registeredViaInvite && customAgents.length > 0" class="agent-group">
             <div class="agent-group-title">{{ $t('agent.customAgents') }}</div>
             <div v-for="agent in customAgents" :key="agent.id" class="agent-option"
               :class="{ selected: isMyAgentSelected(agent) }" @mouseenter="onOptionEnter(agent, $event)"
@@ -53,8 +58,8 @@
             </div>
           </div>
 
-          <!-- 共享给我 -->
-          <div v-if="sharedAgentsList.length > 0" class="agent-group">
+          <!-- 共享给我（链接注册用户一律不可见，与菜单/添加模型策略一致） -->
+          <div v-if="!authStore.registeredViaInvite && sharedAgentsList.length > 0" class="agent-group">
             <div class="agent-group-title">{{ $t('agent.tabs.sharedToMe') }}</div>
             <div v-for="shared in sharedAgentsList" :key="`${shared.agent.id}-${shared.source_tenant_id}`"
               class="agent-option" :class="{ selected: isSharedAgentSelected(shared) }"
@@ -188,6 +193,7 @@ import { type CustomAgent, BUILTIN_QUICK_ANSWER_ID, BUILTIN_SMART_REASONING_ID }
 import AgentAvatar from '@/components/AgentAvatar.vue';
 import { useOrganizationStore } from '@/stores/organization';
 import { useSettingsStore } from '@/stores/settings';
+import { useAuthStore } from '@/stores/auth';
 import type { SharedAgentInfo } from '@/api/organization';
 import { getRootZoom, rectToCssPx, cssViewportSize } from '@/utils/zoom';
 import { type ModelConfig } from '@/api/model';
@@ -210,6 +216,7 @@ const router = useRouter();
 const orgStore = useOrganizationStore();
 const settingsStore = useSettingsStore();
 const chatResources = useChatResourcesStore();
+const authStore = useAuthStore();
 
 const props = defineProps<{
   visible: boolean;
