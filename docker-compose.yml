@@ -74,6 +74,9 @@ services:
     env_file:
       - .env
     environment:
+      - HTTP_PROXY=${HTTP_PROXY:-}      
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-}
       - LOG_LEVEL=${LOG_LEVEL:-}
       - COS_SECRET_ID=${COS_SECRET_ID:-}
       - COS_SECRET_KEY=${COS_SECRET_KEY:-}
