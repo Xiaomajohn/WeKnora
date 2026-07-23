@@ -12,12 +12,17 @@ ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
 
-# 关键：把 ARG 写进 ENV，所有后续 RUN 才能继承
+# 关键：把 ARG 写进 ENV，所有后续 RUN 才能继承。
+# 小写代理 (http_proxy/https_proxy) 互为兏底：
+#   - curl 拉 DuckDB 扩展用 HTTPS URL，默认读 https_proxy；
+#   - duckdb-go 的 INSTALL 走 http://extensions.duckdb.org:80 (固定 HTTP)，
+#     只读小写 http_proxy，不会回退 https_proxy。
+# 两端任一为空都会导致构建期网络请求走不通，因此这里互相友底。
 ENV HTTP_PROXY=${HTTP_PROXY} \
     HTTPS_PROXY=${HTTPS_PROXY} \
     NO_PROXY=${NO_PROXY} \
-    http_proxy=${HTTP_PROXY} \
-    https_proxy=${HTTPS_PROXY} \
+    http_proxy=${HTTP_PROXY:-${HTTPS_PROXY}} \
+    https_proxy=${HTTPS_PROXY:-${HTTP_PROXY}} \
     no_proxy=${NO_PROXY}
 # 设置Go环境变量
 ENV GOPRIVATE=${GOPRIVATE_ARG}
