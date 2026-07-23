@@ -100,6 +100,7 @@
       </details>
 
       <t-tabs v-model="activeSettingsSection" class="settings-section-tabs">
+        <t-tab-panel value="users" :label="sectionTabLabel('users')" />
         <t-tab-panel value="access" :label="sectionTabLabel('access')" />
         <t-tab-panel value="tenant" :label="sectionTabLabel('tenant')" />
         <t-tab-panel value="runtime" :label="sectionTabLabel('runtime')" />
@@ -110,6 +111,16 @@
           :label="sectionTabLabel('other')"
         />
       </t-tabs>
+
+      <!--
+        User management surface. Rendered as a sibling of the settings
+        section (not inside it) so it doesn't inherit the setting-row /
+        settings-group CSS hooks — its layout is a search + table + drawer
+        and would clash with the running section's grid. The component
+        fetches its own data lazily; the SystemAdmin gate in router/index.ts
+        means only admins ever reach here.
+      -->
+      <UserManagement v-if="activeSettingsSection === 'users'" />
 
       <section class="settings-section-panel" :aria-labelledby="`settings-section-${activeSettingsSection}`">
         <div class="settings-section-intro">
@@ -675,6 +686,7 @@ import {
   type AuditOutcome,
 } from '@/api/system'
 import { useAuthStore } from '@/stores/auth'
+import UserManagement from './UserManagement.vue'
 
 const authStore = useAuthStore()
 const currentUserId = computed(() => authStore.currentUserId)
@@ -790,7 +802,7 @@ const savedKey = ref<string | null>(null)
 const saveAnnouncement = ref('')
 let savedKeyTimer: ReturnType<typeof setTimeout> | null = null
 
-type SettingsSection = 'access' | 'tenant' | 'runtime' | 'security' | 'other'
+type SettingsSection = 'access' | 'tenant' | 'runtime' | 'security' | 'users' | 'other'
 
 // Product-oriented order, rather than the registry's alphabetical key order.
 // Unknown/out-of-band rows remain visible in a conditional "Other" tab so the
@@ -849,6 +861,14 @@ const overriddenCount = computed(() => settings.value.filter(hasOverride).length
 const restartRequiredCount = computed(() => settings.value.filter((item) => item.requires_restart).length)
 
 function sectionTabLabel(section: SettingsSection): string {
+  if (section === 'users') {
+    // The "users & permissions" tab has no settings keys and shows no
+    // count badge (the user total lives inside UserManagement.vue so
+    // users-tab text isn't tied to a parent-component fetch). Plain tab
+    // label — mirrors the i18n contract for the other special-case tabs
+    // (e.g. the audit drawer header), which also drop the {count} slot.
+    return t(`system.globalSettings.sections.${section}.tab`)
+  }
   const count = section === 'other'
     ? unknownSettings.value.length
     : SETTINGS_SECTION_KEYS[section].filter((key) => settingsByKey.value.has(key)).length + (section === 'access' ? 2 : 0)

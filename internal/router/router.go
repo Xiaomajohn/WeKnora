@@ -890,6 +890,21 @@ func RegisterSystemAdminRoutes(
 		adminRoutes.GET("/list", handler.ListSystemAdmins)
 		adminRoutes.POST("/users/reset-password", handler.ResetUserPassword)
 
+		// P2: SystemAdmin user management surface (list, detail, patch).
+		// ListUsers returns a paginated, optionally searched view of every
+		// registered user with a per-row MembershipCount; GetUserDetail
+		// returns the user's full profile plus their active tenant
+		// memberships so the drawer can render "spaces + roles" without a
+		// second round-trip; UpdateUser is a PATCH that flips username /
+		// email / is_active with self-lockout + last-admin guards.
+		// Note these are mounted on the *same* /users prefix as
+		// reset-password above — gin's tree router resolves the static
+		// /users/reset-password literal before the /users/:id param, so
+		// the two coexist without a routing conflict.
+		adminRoutes.GET("/users", handler.ListUsers)
+		adminRoutes.GET("/users/:id", handler.GetUserDetail)
+		adminRoutes.PATCH("/users/:id", handler.UpdateUser)
+
 		// P1: platform-wide system settings (DB-backed runtime tunables).
 		// Reads return raw model rows / arrays (no `gin.H{"data":...}`
 		// wrapping), matching the project's axios interceptor convention

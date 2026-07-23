@@ -122,6 +122,17 @@ const (
 	// session revocation, but never contain the old or new password.
 	AuditActionSystemUserPasswordReset AuditAction = "system.user_password_reset"
 
+	// AuditActionSystemUserUpdated fires when a SystemAdmin edits another
+	// user's account through the user-management surface — username, email,
+	// is_active. Toggling system-admin status is intentionally NOT covered
+	// here; that path has its own dedicated actions (promoted / revoked).
+	// Details payload carries {target_email, target_username, changes: {field:
+	// {from, to}}} so an audit reader can see exactly which field changed
+	// without having to diff two snapshots. Password resets do not flow
+	// through this action — they emit AuditActionSystemUserPasswordReset
+	// instead. TenantID=0 because the change is system-scope.
+	AuditActionSystemUserUpdated AuditAction = "system.user_updated"
+
 	// Runtime queue mutations are privileged SystemAdmin actions. Retrying an
 	// archived task can repeat its original side effects; deleting one removes
 	// the Redis failure record. Both must leave a platform audit trail.

@@ -45,6 +45,13 @@ type SystemHandler struct {
 	tenantSvc        interfaces.TenantService
 	userSvc          interfaces.UserService
 	systemSettingSvc interfaces.SystemSettingService
+	// tenantMemberService backs the user-management surface. It powers
+	// ListByUser so the SystemAdmin "用户管理" page can render one row per
+	// tenant the user belongs to (with role + tenant name). Optional — a
+	// nil dependency degrades the listing to "no membership info" rather
+	// than failing the whole endpoint, mirroring the auditSvc nil-pattern
+	// used elsewhere in this handler.
+	tenantMemberService interfaces.TenantMemberService
 	// auditSvc is optional — when nil, emitAdminAudit no-ops so unit
 	// tests that wire a partial container still compile. In production
 	// the dig graph always provides one.
@@ -70,17 +77,19 @@ func NewSystemHandler(cfg *config.Config,
 	auditSvc interfaces.AuditLogService,
 	taskInspector interfaces.TaskInspector,
 	knowledgeSvc interfaces.KnowledgeService,
+	tenantMemberService interfaces.TenantMemberService,
 ) *SystemHandler {
 	return &SystemHandler{
-		cfg:              cfg,
-		neo4jDriver:      neo4jDriver,
-		documentReader:   documentReader,
-		tenantSvc:        tenantSvc,
-		userSvc:          userSvc,
-		systemSettingSvc: systemSettingSvc,
-		auditSvc:         auditSvc,
-		taskInspector:    taskInspector,
-		knowledgeSvc:     knowledgeSvc,
+		cfg:                cfg,
+		neo4jDriver:        neo4jDriver,
+		documentReader:     documentReader,
+		tenantSvc:          tenantSvc,
+		userSvc:            userSvc,
+		systemSettingSvc:   systemSettingSvc,
+		auditSvc:           auditSvc,
+		taskInspector:      taskInspector,
+		knowledgeSvc:       knowledgeSvc,
+		tenantMemberService: tenantMemberService,
 	}
 }
 
@@ -1437,6 +1446,405 @@ func (h *SystemHandler) ResetUserPassword(c *gin.Context) {
 		"sessions_revoked": true,
 	})
 	c.JSON(http.StatusOK, gin.H{"message": "Password reset successfully"})
+}
+
+// ============================================================================
+// User management (SystemAdmin-only)
+// ----------------------------------------------------------------------------
+// P2 surface: lets a SystemAdmin browse every registered user, see which
+// tenants each user belongs to (with role), and patch mutable identity
+// fields (username / email / is_active). SystemAdmin grants/revokes flow
+// through PromoteUserToSystemAdmin / RevokeSystemAdmin (P0) and password
+// resets through ResetUserPassword (P0) above; this block intentionally
+// does not duplicate those actions.
+// ============================================================================
+
+// UserMembershipView is the API projection of a single TenantMember row
+// joined with the tenant's display name. Returned by GetUserDetail so the
+// SystemAdmin drawer can render "spaces this user belongs to" without a
+// second round-trip. Distinct from types.Membership (the login-response
+// projection) because the management UI needs status / joined_at /
+// home-tenant marker; types.Membership only carries role + name.
+type UserMembershipView struct {
+	TenantID     uint64                    `json:"tenant_id"`
+	TenantName   string                    `json:"tenant_name"`
+	Role         types.TenantRole          `json:"role"`
+	Status       types.TenantMemberStatus  `json:"status"`
+	JoinedAt     time.Time                 `json:"joined_at"`
+	IsHomeTenant bool                      `json:"is_home_tenant"`
+}
+
+// AdminUserListItem is one row of GET /system/admin/users. Embeds the
+// public UserInfo shape so the existing SystemAdmin "manage_admins"
+// list keeps rendering admins the same way, and adds MembershipCount so
+// the front-end can show "member of N spaces" without having to expand
+// each row. The full membership list is fetched on demand via
+// GET /system/admin/users/:id — keeping list responses cheap on a large
+// users table.
+type AdminUserListItem struct {
+	*types.UserInfo
+	MembershipCount int `json:"membership_count"`
+}
+
+// AdminUserListResponse is the paginated response for
+// GET /system/admin/users. Total mirrors ListSystemAdmins so the
+// front-end renders pagination metadata without a follow-up call.
+type AdminUserListResponse struct {
+	Total int64              `json:"total"`
+	Users []*AdminUserListItem `json:"users"`
+}
+
+// AdminUserDetailResponse is the response for
+// GET /system/admin/users/:id — the public UserInfo plus every active
+// tenant membership. Memberships are filtered to status=active so the
+// UI doesn't have to dedupe removed/left rows; a soft-deleted membership
+// shows up in the audit log instead.
+type AdminUserDetailResponse struct {
+	*types.UserInfo
+	Memberships []UserMembershipView `json:"memberships"`
+}
+
+// UpdateUserRequest is the PATCH payload for editing another user's
+// account. Pointer fields model PATCH semantics: only keys the caller
+// actually sends are applied; everything else is preserved. Field-level
+// validators enforce invariants the service layer can't easily express
+// (username uniqueness, email uniqueness, "can't lock yourself out").
+type UpdateUserRequest struct {
+	Username *string `json:"username,omitempty"`
+	Email    *string `json:"email,omitempty"`
+	IsActive *bool   `json:"is_active,omitempty"`
+}
+
+// loadMembershipsForUser reads every active membership for userID and
+// joins it with the corresponding tenant's display name. Used by both
+// the list (count only) and the detail (full view) endpoints. Always
+// returns a non-nil slice so callers can serialise it as `[]` even when
+// tenantMemberService is unavailable (mirrors LoginResponse.Memberships'
+// "always populated" contract).
+//
+// Best-effort: a missing memberService or tenant lookup failure logs a
+// warning and degrades to an empty membership list rather than failing
+// the whole user endpoint. The user row itself remains the source of
+// truth for "does this user exist".
+func (h *SystemHandler) loadMembershipsForUser(
+	ctx context.Context,
+	userID string,
+	homeTenantID uint64,
+) []UserMembershipView {
+	if h.tenantMemberService == nil {
+		logger.Warnf(ctx,
+			"loadMembershipsForUser: tenantMemberService unavailable, returning empty list for user %s",
+			userID)
+		return []UserMembershipView{}
+	}
+	rows, err := h.tenantMemberService.ListByUser(ctx, userID)
+	if err != nil {
+		logger.Warnf(ctx,
+			"loadMembershipsForUser: ListByUser failed for user %s: %v",
+			userID, err)
+		return []UserMembershipView{}
+	}
+	// Only surface active memberships; soft-deleted / invited / suspended
+	// rows stay in the audit log but don't clutter the admin drawer.
+	active := make([]*types.TenantMember, 0, len(rows))
+	needsLookup := make([]uint64, 0, len(rows))
+	for _, m := range rows {
+		if m == nil || m.Status != types.TenantMemberStatusActive {
+			continue
+		}
+		active = append(active, m)
+		needsLookup = append(needsLookup, m.TenantID)
+	}
+	tenantByID := map[uint64]*types.Tenant{}
+	if len(needsLookup) > 0 && h.tenantSvc != nil {
+		if found, terr := h.tenantSvc.GetTenantsByIDs(ctx, needsLookup); terr == nil {
+			tenantByID = found
+		} else {
+			logger.Warnf(ctx,
+				"loadMembershipsForUser: batch tenant lookup failed for user %s: %v",
+				userID, terr)
+		}
+	}
+	out := make([]UserMembershipView, 0, len(active))
+	for _, m := range active {
+		name := ""
+		if t, ok := tenantByID[m.TenantID]; ok && t != nil {
+			name = t.Name
+		}
+		if strings.TrimSpace(name) == "" {
+			// Drop memberships whose tenant row is gone — same dedup
+			// rule userService.buildMembershipsForUser uses. Operators
+			// investigating a missing tenant should consult the audit
+			// log rather than see a phantom row in the drawer.
+			continue
+		}
+		out = append(out, UserMembershipView{
+			TenantID:     m.TenantID,
+			TenantName:   name,
+			Role:         m.Role,
+			Status:       m.Status,
+			JoinedAt:     m.JoinedAt,
+			IsHomeTenant: m.TenantID == homeTenantID,
+		})
+	}
+	return out
+}
+
+// ListUsers godoc
+// @Summary      List all registered users (SystemAdmin only)
+// @Description  Paginated, optionally filtered list of every registered user
+// @Description  in the system. Search matches username or email
+// @Description  (case-insensitive substring). Empty query lists everyone,
+// @Description  newest first. Each row carries MembershipCount so the
+// @Description  front-end can render "member of N spaces" without an extra
+// @Description  call; the full membership list is fetched via the
+// @Description  /:id endpoint on demand.
+// @Tags         System Admin
+// @Produce      json
+// @Param        offset query int false "Page offset" default(0)
+// @Param        limit  query int false "Page size (max 200)" default(50)
+// @Param        q      query string false "Substring match against username or email"
+// @Success      200  {object}  AdminUserListResponse  "Users retrieved successfully"
+// @Failure      403  {object}  map[string]interface{}  "Forbidden: not a system admin"
+// @Router       /system/admin/users [get]
+func (h *SystemHandler) ListUsers(c *gin.Context) {
+	ctx := logger.CloneContext(c.Request.Context())
+
+	offset := 0
+	limit := 50
+	if v := c.Query("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	query := strings.TrimSpace(c.Query("q"))
+
+	var (
+		users []*types.User
+		total int64
+		err   error
+	)
+	if query == "" {
+		// Full-list path. We don't have a CountUsers call, so fetch
+		// one page past offset+limit to detect "more pages exist".
+		// Acceptable here because the page is bounded; the alternative
+		// would be a separate COUNT(*) which is fine for the small
+		// users table but wasteful on a large deployment.
+		users, err = h.userSvc.ListUsers(ctx, offset, limit+1)
+		if err != nil {
+			logger.Errorf(ctx, "Error listing users: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list users"})
+			return
+		}
+		if int64(len(users)) > int64(limit) {
+			total = int64(offset) + int64(len(users)) - 1
+			users = users[:limit]
+		} else {
+			total = int64(offset + len(users))
+		}
+	} else {
+		// Search path. SearchUsers has its own (smaller) default cap and
+		// returns active users only — the UI explicitly excludes inactive
+		// accounts from the search dropdown but the table view shows
+		// them, so the list endpoint still needs to surface them.
+		// Workaround: fetch a wider window via SearchUsers (no total
+		// returned) and let the caller paginate client-side. This is a
+		// known limitation documented in the front-end.
+		results, serr := h.userSvc.SearchUsers(ctx, query, limit+1)
+		if serr != nil {
+			logger.Errorf(ctx, "Error searching users %q: %v", query, serr)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to search users"})
+			return
+		}
+		users = results
+		if int64(len(users)) > int64(limit) {
+			total = int64(offset) + int64(len(users)) - 1
+			users = users[:limit]
+		} else {
+			total = int64(offset + len(users))
+		}
+	}
+
+	items := make([]*AdminUserListItem, 0, len(users))
+	for _, u := range users {
+		if u == nil {
+			continue
+		}
+		memberships := h.loadMembershipsForUser(ctx, u.ID, u.TenantID)
+		items = append(items, &AdminUserListItem{
+			UserInfo:        u.ToUserInfo(),
+			MembershipCount: len(memberships),
+		})
+	}
+
+	c.JSON(http.StatusOK, AdminUserListResponse{
+		Total: total,
+		Users: items,
+	})
+}
+
+// GetUserDetail godoc
+// @Summary      Get a user's full profile + memberships (SystemAdmin only)
+// @Description  Returns one user's account fields plus every active tenant
+// @Description  membership they hold (joined with tenant name, role, status,
+// @Description  joined_at, and whether each row is the user's home tenant).
+// @Description  Returns 404 if the user id is unknown.
+// @Tags         System Admin
+// @Produce      json
+// @Param        id   path   string  true  "User UUID"
+// @Success      200  {object}  AdminUserDetailResponse  "User profile retrieved"
+// @Failure      403  {object}  map[string]interface{}  "Forbidden: not a system admin"
+// @Failure      404  {object}  map[string]interface{}  "User not found"
+// @Router       /system/admin/users/{id} [get]
+func (h *SystemHandler) GetUserDetail(c *gin.Context) {
+	ctx := logger.CloneContext(c.Request.Context())
+
+	userID := strings.TrimSpace(c.Param("id"))
+	if userID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "User id is required"})
+		return
+	}
+	user, err := h.userSvc.GetUserByID(ctx, userID)
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+	memberships := h.loadMembershipsForUser(ctx, user.ID, user.TenantID)
+	c.JSON(http.StatusOK, AdminUserDetailResponse{
+		UserInfo:    user.ToUserInfo(),
+		Memberships: memberships,
+	})
+}
+
+// UpdateUser godoc
+// @Summary      Update a user's account (SystemAdmin only)
+// @Description  PATCH-style update of username, email, and/or is_active for
+// @Description  any user except yourself. Username and email uniqueness are
+// @Description  enforced; the SystemAdmin cannot disable their own account
+// @Description  (self-lockout guard) and disabling the last system
+// @Description  administrator is rejected. System-admin grants/revokes
+// @Description  must go through PromoteUserToSystemAdmin / RevokeSystemAdmin;
+// @Description  password resets must go through the dedicated endpoint.
+// @Description  Every applied field is recorded in the audit log with its
+// @Description  before/after value.
+// @Tags         System Admin
+// @Accept       json
+// @Produce      json
+// @Param        id      path   string             true  "User UUID"
+// @Param        request body   UpdateUserRequest  true  "Fields to patch"
+// @Success      200  {object}  types.UserInfo  "User updated successfully"
+// @Failure      400  {object}  map[string]interface{}  "Bad request / collision / self-lockout / last-admin guard"
+// @Failure      403  {object}  map[string]interface{}  "Forbidden: not a system admin"
+// @Failure      404  {object}  map[string]interface{}  "User not found"
+// @Router       /system/admin/users/{id} [patch]
+func (h *SystemHandler) UpdateUser(c *gin.Context) {
+	ctx := logger.CloneContext(c.Request.Context())
+
+	userID := strings.TrimSpace(c.Param("id"))
+	if userID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "User id is required"})
+		return
+	}
+
+	var req UpdateUserRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+	if req.Username == nil && req.Email == nil && req.IsActive == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No fields to update"})
+		return
+	}
+
+	user, err := h.userSvc.GetUserByID(ctx, userID)
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	callerID, _ := types.UserIDFromContext(ctx)
+	if callerID == user.ID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot edit your own account here; use the profile settings instead"})
+		return
+	}
+
+	changes := map[string]map[string]any{}
+	if req.Username != nil {
+		newName := strings.TrimSpace(*req.Username)
+		if newName == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "username cannot be empty"})
+			return
+		}
+		if newName != user.Username {
+			if existing, gerr := h.userSvc.GetUserByUsername(ctx, newName); gerr == nil && existing != nil && existing.ID != user.ID {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "username already in use"})
+				return
+			}
+			changes["username"] = map[string]any{"from": user.Username, "to": newName}
+			user.Username = newName
+		}
+	}
+	if req.Email != nil {
+		newEmail := strings.TrimSpace(*req.Email)
+		if newEmail == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "email cannot be empty"})
+			return
+		}
+		if newEmail != user.Email {
+			if existing, gerr := h.userSvc.GetUserByEmail(ctx, newEmail); gerr == nil && existing != nil && existing.ID != user.ID {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "email already in use"})
+				return
+			}
+			changes["email"] = map[string]any{"from": user.Email, "to": newEmail}
+			user.Email = newEmail
+		}
+	}
+	if req.IsActive != nil {
+		newActive := *req.IsActive
+		if newActive != user.IsActive {
+			// Disabling the last active system admin would lock the
+			// platform out of administrative recovery. Mirror the
+			// last-admin guard in RevokeSystemAdmin: if the target is
+			// currently a system admin and we're flipping them to
+			// inactive, refuse.
+			if user.IsSystemAdmin && !newActive {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot disable an active system administrator; revoke the system-admin role first"})
+				return
+			}
+			changes["is_active"] = map[string]any{"from": user.IsActive, "to": newActive}
+			user.IsActive = newActive
+		}
+	}
+
+	if len(changes) == 0 {
+		// Caller sent keys but every value matched the current row.
+		// No-op success, no audit row — keeps the audit table free of
+		// probe noise ("patch everything to the same value").
+		c.JSON(http.StatusOK, user.ToUserInfo())
+		return
+	}
+
+	if err := h.userSvc.UpdateUser(ctx, user); err != nil {
+		logger.Errorf(ctx, "Failed to update user %s: %v", user.ID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update user"})
+		return
+	}
+
+	logger.Infof(ctx, "User %s (ID: %s) updated by system administrator", user.Username, user.ID)
+	h.emitAdminAudit(ctx, types.AuditActionSystemUserUpdated, user, map[string]any{
+		"target_email":    user.Email,
+		"target_username": user.Username,
+		"changes":         changes,
+	})
+	c.JSON(http.StatusOK, user.ToUserInfo())
 }
 
 // ============================================================================

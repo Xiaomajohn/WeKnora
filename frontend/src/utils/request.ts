@@ -291,6 +291,19 @@ export function put<T = any>(url: string, data = {}, config?: any): Promise<T> {
   return instance.put<T>(url, data, config) as unknown as Promise<T>;
 }
 
+/**
+ * PATCH helper. Same unwrap contract as `post`/`put`: the axios interceptor
+ * strips `response.data` at the boundary, so the resolved value IS the
+ * payload (not an AxiosResponse envelope). Use this instead of importing
+ * axios directly so the auth-refresh / Accept-Language / X-Tenant-ID
+ * interceptors continue to apply — calling `axios.patch` from a feature
+ * module would silently bypass them and break X-Tenant-ID routing on the
+ * user-management endpoints.
+ */
+export function patch<T = any>(url: string, data = {}, config?: any): Promise<T> {
+  return instance.patch<T>(url, data, config) as unknown as Promise<T>;
+}
+
 export function del<T = any>(url: string, data?: any): Promise<T> {
   return instance.delete<T>(url, { data }) as unknown as Promise<T>;
 }
