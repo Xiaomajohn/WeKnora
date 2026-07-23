@@ -1,4 +1,4 @@
-import { get, post, patch } from '@/utils/request'
+import { get, post, patch, del } from '@/utils/request'
 
 // ---------------------------------------------------------------------------
 // System Admin user-management surface
@@ -208,5 +208,56 @@ export interface ResetUserPasswordRequest {
 
 export async function resetUserPassword(req: ResetUserPasswordRequest): Promise<{ message: string }> {
   const response = await post('/api/v1/system/admin/users/reset-password', req)
+  return response as unknown as { message: string }
+}
+
+/**
+ * Payload for POST /api/v1/system/admin/users — SystemAdmin-managed
+ * user creation. Deliberately bypasses /auth/register (no email/invite
+ * flow) and lands the user in the tenantless state (User.TenantID=0)
+ * until an admin assigns a workspace via the space-management surface.
+ *
+ * Field-level validation lives on the backend (UserService.CreateUser):
+ *   - bcrypt hashing of `password`
+ *   - ValidatePasswordPolicy on `password`
+ *   - GetUserByEmail / GetUserByUsername uniqueness checks
+ * The handler returns the new UserInfo directly — same unwrap contract
+ * as updateUser. Sending a duplicate email/username surfaces as HTTP
+ * 400 with the backend's message preserved on err.message.
+ */
+export interface CreateUserRequest {
+  username: string
+  email: string
+  password: string
+  /** Defaults to true on the server when omitted. */
+  is_active?: boolean
+}
+
+/**
+ * Create a new user as SystemAdmin. The freshly created user is in
+ * the tenantless state and must be assigned to a workspace via
+ * `createAdminTenant` (or by joining an existing one). The returned
+ * UserInfo is the public-facing projection — `tenant_id` will be 0.
+ *
+ * Backend: POST /api/v1/system/admin/users (SystemAdmin only).
+ */
+export async function createUser(req: CreateUserRequest): Promise<UserInfo> {
+  const response = await post('/api/v1/system/admin/users', req)
+  return response as unknown as UserInfo
+}
+
+/**
+ * Delete a user as SystemAdmin. Backend enforces two preconditions:
+ *   - cannot delete self (return 400)
+ *   - cannot delete the last remaining system admin (return 400)
+ * Memberships owned by the user are cascade-removed server-side; the
+ * response is a simple acknowledgement message. If the user id is
+ * unknown the backend returns 404 — both surface as thrown exceptions
+ * via the shared axios interceptor.
+ *
+ * Backend: DELETE /api/v1/system/admin/users/:id (SystemAdmin only).
+ */
+export async function deleteUser(userId: string): Promise<{ message: string }> {
+  const response = await del(`/api/v1/system/admin/users/${encodeURIComponent(userId)}`)
   return response as unknown as { message: string }
 }

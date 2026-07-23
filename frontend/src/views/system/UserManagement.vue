@@ -46,6 +46,13 @@
         <template #prefix-icon><t-icon name="search" /></template>
       </t-input>
       <t-button
+        theme="primary"
+        @click="openCreate"
+      >
+        <template #icon><t-icon name="add" /></template>
+        {{ t('system.globalSettings.userManagement.actions.createUser') }}
+      </t-button>
+      <t-button
         variant="outline"
         :loading="loading"
         @click="reload"
@@ -153,6 +160,21 @@
                 @click="openPassword(row)"
               >
                 <template #icon><t-icon name="lock-on" /></template>
+              </t-button>
+            </t-tooltip>
+            <t-tooltip
+              v-if="row.id !== currentUserId"
+              :content="t('system.globalSettings.userManagement.actions.delete')"
+              placement="top"
+            >
+              <t-button
+                theme="danger"
+                variant="text"
+                shape="square"
+                size="small"
+                @click.stop="openDelete(row)"
+              >
+                <template #icon><t-icon name="delete" /></template>
               </t-button>
             </t-tooltip>
             <t-popconfirm
@@ -311,6 +333,10 @@
           <t-button theme="warning" @click="openPassword(detail); detailVisible = false">
             <template #icon><t-icon name="lock-on" /></template>
             {{ t('system.globalSettings.userManagement.actions.resetPassword') }}
+          </t-button>
+          <t-button theme="danger" @click="openDelete(detail); detailVisible = false">
+            <template #icon><t-icon name="delete" /></template>
+            {{ t('system.globalSettings.userManagement.actions.delete') }}
           </t-button>
           <t-popconfirm
             :content="detail.is_active
@@ -482,6 +508,147 @@
         </t-form-item>
       </t-form>
     </t-dialog>
+
+    <!--
+      Create user dialog. Username + email + password (+ confirm) +
+      is_active switch. Submission lands the user in the tenantless state
+      (TenantID=0). The detail dialog stays open afterwards and the list
+      reloads so the operator can immediately follow up with a workspace
+      assignment from the space-management tab — see the success hint.
+    -->
+    <t-dialog
+      v-model:visible="createVisible"
+      :header="t('system.globalSettings.userManagement.createDialog.title')"
+      width="480px"
+      placement="center"
+      dialog-class-name="user-management-create-dialog"
+      :confirm-btn="{
+        content: t('system.globalSettings.userManagement.createDialog.submit'),
+        theme: 'primary',
+        loading: createSubmitting,
+      }"
+      :cancel-btn="{
+        content: t('system.globalSettings.userManagement.createDialog.cancel'),
+        variant: 'outline',
+      }"
+      :close-on-overlay-click="!createSubmitting"
+      :close-btn="!createSubmitting"
+      @confirm="submitCreate"
+    >
+      <p class="um-edit-description">
+        {{ t('system.globalSettings.userManagement.createDialog.description') }}
+      </p>
+      <t-form
+        ref="createFormRef"
+        :data="createForm"
+        :rules="createRules"
+        label-align="top"
+      >
+        <t-form-item
+          :label="t('system.globalSettings.userManagement.createDialog.fields.username')"
+          name="username"
+        >
+          <t-input
+            v-model="createForm.username"
+            clearable
+            :placeholder="t('system.globalSettings.userManagement.createDialog.usernamePlaceholder')"
+            :disabled="createSubmitting"
+          />
+        </t-form-item>
+        <t-form-item
+          :label="t('system.globalSettings.userManagement.createDialog.fields.email')"
+          name="email"
+        >
+          <t-input
+            v-model="createForm.email"
+            type="email"
+            clearable
+            :placeholder="t('system.globalSettings.userManagement.createDialog.emailPlaceholder')"
+            :disabled="createSubmitting"
+          />
+        </t-form-item>
+        <t-form-item
+          :label="t('system.globalSettings.userManagement.createDialog.fields.password')"
+          name="password"
+        >
+          <t-input
+            v-model="createForm.password"
+            type="password"
+            autocomplete="new-password"
+            :placeholder="t('system.globalSettings.userManagement.createDialog.passwordPlaceholder')"
+            :disabled="createSubmitting"
+          >
+            <template #prefix-icon><t-icon name="lock-on" /></template>
+          </t-input>
+        </t-form-item>
+        <t-form-item
+          :label="t('system.globalSettings.userManagement.createDialog.fields.confirmPassword')"
+          name="confirmPassword"
+        >
+          <t-input
+            v-model="createForm.confirmPassword"
+            type="password"
+            autocomplete="new-password"
+            :placeholder="t('system.globalSettings.userManagement.createDialog.confirmPasswordPlaceholder')"
+            :disabled="createSubmitting"
+            @enter="submitCreate"
+          >
+            <template #prefix-icon><t-icon name="lock-on" /></template>
+          </t-input>
+        </t-form-item>
+        <t-form-item
+          :label="t('system.globalSettings.userManagement.createDialog.fields.isActive')"
+          name="isActive"
+        >
+          <t-switch v-model="createForm.isActive" :disabled="createSubmitting" />
+        </t-form-item>
+      </t-form>
+    </t-dialog>
+
+    <!--
+      Delete user dialog. The confirm step requires the operator to type
+      the target user's email exactly — same anti-fat-finger pattern as
+      SpaceManagement's DeleteSpaceConfirmDialog. Backend enforces two
+      preconditions (not-self, not-last-admin); both surface as thrown
+      exceptions via the shared axios interceptor.
+    -->
+    <t-dialog
+      v-model:visible="deleteVisible"
+      :header="t('system.globalSettings.userManagement.deleteDialog.title', { name: deleteTarget?.username || deleteTarget?.email || '' })"
+      width="480px"
+      placement="center"
+      dialog-class-name="user-management-delete-dialog"
+      :confirm-btn="{
+        content: t('system.globalSettings.userManagement.deleteDialog.submit'),
+        theme: 'danger',
+        loading: deleteSubmitting,
+        disabled: !deleteConfirmed,
+      }"
+      :cancel-btn="{
+        content: t('system.globalSettings.userManagement.deleteDialog.cancel'),
+        variant: 'outline',
+      }"
+      :close-on-overlay-click="!deleteSubmitting"
+      :close-btn="!deleteSubmitting"
+      @confirm="submitDelete"
+    >
+      <t-alert
+        theme="error"
+        :message="t('system.globalSettings.userManagement.deleteDialog.warning')"
+        class="um-delete-warning"
+      />
+      <p class="um-edit-description">
+        {{ t('system.globalSettings.userManagement.deleteDialog.confirmHint', { email: deleteTarget?.email || '' }) }}
+      </p>
+      <t-input
+        v-model="deleteConfirmInput"
+        :placeholder="t('system.globalSettings.userManagement.deleteDialog.confirmPlaceholder')"
+        :disabled="deleteSubmitting"
+        clearable
+      >
+        <template #prefix-icon><t-icon name="user" /></template>
+      </t-input>
+    </t-dialog>
   </div>
 </template>
 
@@ -495,6 +662,8 @@ import {
   getUserDetail,
   updateUser,
   resetUserPassword,
+  createUser,
+  deleteUser,
   type AdminUserListItem,
   type AdminUserDetailResponse,
   type UpdateUserRequest,
@@ -895,6 +1064,139 @@ onBeforeUnmount(() => {
   // No timers or subscriptions to clear — Dialog/Drawer/Popconfirm are
   // controlled components and clean themselves up when their v-model flips.
 })
+
+// ---------------------------------------------------------------------------
+// Create user dialog
+// ---------------------------------------------------------------------------
+//
+// SystemAdmin creates a user via POST /api/v1/system/admin/users. The new
+// account lands with TenantID=0 (tenantless). After success we reload the
+// list and surface a hint suggesting the operator follow up with a
+// workspace assignment from the space-management tab.
+
+const createVisible = ref(false)
+const createSubmitting = ref(false)
+const createFormRef = ref<FormInstanceFunctions>()
+const createForm = reactive({
+  username: '',
+  email: '',
+  password: '',
+  confirmPassword: '',
+  isActive: true,
+})
+
+const createRules: Record<string, FormRule[]> = {
+  username: [
+    { required: true, message: t('system.globalSettings.userManagement.createDialog.validation.usernameRequired'), trigger: 'blur' },
+    { min: 2, max: 100, message: t('system.globalSettings.userManagement.createDialog.usernamePlaceholder'), trigger: 'blur' },
+  ],
+  email: [
+    { required: true, message: t('system.globalSettings.userManagement.createDialog.validation.emailRequired'), trigger: 'blur' },
+    { email: true, message: t('system.globalSettings.userManagement.createDialog.emailPlaceholder'), trigger: 'blur' },
+  ],
+  password: [
+    { required: true, message: t('system.globalSettings.userManagement.createDialog.validation.passwordRequired'), trigger: 'blur' },
+    { min: 8, message: t('system.globalSettings.userManagement.createDialog.validation.passwordLength'), trigger: 'blur' },
+    { max: 32, message: t('system.globalSettings.userManagement.createDialog.validation.passwordLength'), trigger: 'blur' },
+    { pattern: /[a-zA-Z]/, message: t('system.globalSettings.userManagement.createDialog.validation.passwordLetter'), trigger: 'blur' },
+    { pattern: /\d/, message: t('system.globalSettings.userManagement.createDialog.validation.passwordNumber'), trigger: 'blur' },
+  ],
+  confirmPassword: [
+    { required: true, message: t('system.globalSettings.userManagement.createDialog.validation.confirmRequired'), trigger: 'blur' },
+    {
+      validator: (val: string) => val === createForm.password,
+      message: t('system.globalSettings.userManagement.createDialog.validation.passwordMismatch'),
+      trigger: 'blur',
+    },
+  ],
+}
+
+function openCreate() {
+  createForm.username = ''
+  createForm.email = ''
+  createForm.password = ''
+  createForm.confirmPassword = ''
+  createForm.isActive = true
+  createVisible.value = true
+}
+
+async function submitCreate() {
+  const validate = createFormRef.value?.validate
+  if (typeof validate === 'function') {
+    try {
+      await validate()
+    } catch {
+      return
+    }
+  }
+  createSubmitting.value = true
+  try {
+    await createUser({
+      username: createForm.username.trim(),
+      email: createForm.email.trim().toLowerCase(),
+      password: createForm.password,
+      is_active: createForm.isActive,
+    })
+    MessagePlugin.success(t('system.globalSettings.userManagement.createDialog.success'))
+    createVisible.value = false
+    await reload()
+  } catch (e) {
+    const message = (e as { message?: string })?.message
+      || t('system.globalSettings.userManagement.createDialog.failed')
+    MessagePlugin.error(message)
+  } finally {
+    createSubmitting.value = false
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Delete user dialog
+// ---------------------------------------------------------------------------
+//
+// Confirms by typing the target user's email exactly. Same anti-fat-finger
+// pattern as SpaceManagement's DeleteSpaceConfirmDialog. The backend
+// enforces two preconditions:
+//   - cannot delete the caller themselves
+//   - cannot delete the last remaining active system admin
+// Both surface as 400 with the backend's message preserved on err.message.
+
+const deleteVisible = ref(false)
+const deleteSubmitting = ref(false)
+const deleteTarget = ref<AdminUserListItem | AdminUserDetailResponse | null>(null)
+const deleteConfirmInput = ref('')
+
+const deleteConfirmed = computed(() => {
+  const target = deleteTarget.value
+  if (!target) return false
+  return deleteConfirmInput.value.trim() === (target.email || '').trim()
+})
+
+function openDelete(row: AdminUserListItem | AdminUserDetailResponse) {
+  if (row.id === currentUserId.value) {
+    MessagePlugin.warning(t('system.globalSettings.userManagement.deleteDialog.selfBlocked'))
+    return
+  }
+  deleteTarget.value = row
+  deleteConfirmInput.value = ''
+  deleteVisible.value = true
+}
+
+async function submitDelete() {
+  if (!deleteConfirmed.value || !deleteTarget.value) return
+  deleteSubmitting.value = true
+  try {
+    await deleteUser(deleteTarget.value.id)
+    MessagePlugin.success(t('system.globalSettings.userManagement.deleteDialog.success'))
+    deleteVisible.value = false
+    await reload()
+  } catch (e) {
+    const message = (e as { message?: string })?.message
+      || t('system.globalSettings.userManagement.deleteDialog.failed')
+    MessagePlugin.error(message)
+  } finally {
+    deleteSubmitting.value = false
+  }
+}
 </script>
 
 <style scoped>
@@ -1071,6 +1373,10 @@ onBeforeUnmount(() => {
 }
 
 .um-password-warning {
+  margin-bottom: 12px;
+}
+
+.um-delete-warning {
   margin-bottom: 12px;
 }
 </style>

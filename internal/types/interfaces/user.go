@@ -10,6 +10,11 @@ import (
 type UserService interface {
 	// Register creates a new user account
 	Register(ctx context.Context, req *types.RegisterRequest) (*types.User, error)
+	// CreateUser is the SystemAdmin-managed create path. It deliberately
+	// bypasses Register (no invite/email flow) and writes TenantID=0 so a
+	// freshly-created user lands in the tenantless state until an admin
+	// assigns a workspace. Used by POST /api/v1/system/admin/users.
+	CreateUser(ctx context.Context, user *types.User) error
 	// Login authenticates a user and returns tokens
 	Login(ctx context.Context, req *types.LoginRequest) (*types.LoginResponse, error)
 	// GetOIDCAuthorizationURL builds the third-party OIDC authorization URL

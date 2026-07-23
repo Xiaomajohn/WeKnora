@@ -36,6 +36,12 @@ type TenantHandler struct {
 	// in-code default, so a SystemAdmin's UI override applies on the
 	// very next CreateTenant call.
 	systemSettingSvc interfaces.SystemSettingService
+	// auditSvc writes tenant-lifecycle audit rows (system.tenant_created)
+	// when a SystemAdmin creates a workspace on behalf of another user.
+	// Optional — when nil, the audit hook is skipped so unit tests with a
+	// partial dependency graph still compile. Mirrors the nil-safe pattern
+	// used elsewhere in this codebase.
+	auditSvc interfaces.AuditLogService
 }
 
 // NewTenantHandler creates a new tenant handler instance with the provided service
@@ -55,6 +61,9 @@ type TenantHandler struct {
 // `middleware/access.go` (RequireCrossTenantAccess /
 // RequirePathTenantMatch) and are wired in `router.go` so the handler
 // stays focused on business logic.
+//
+// auditSvc may be nil — the audit hook in CreateTenant no-ops in that
+// case. Production wiring always provides one through the dig container.
 func NewTenantHandler(
 	service interfaces.TenantService,
 	apiKeyService interfaces.TenantAPIKeyService,
@@ -63,6 +72,7 @@ func NewTenantHandler(
 	kbService interfaces.KnowledgeBaseService,
 	config *config.Config,
 	systemSettingSvc interfaces.SystemSettingService,
+	auditSvc interfaces.AuditLogService,
 ) *TenantHandler {
 	return &TenantHandler{
 		service:          service,
@@ -72,6 +82,7 @@ func NewTenantHandler(
 		kbService:        kbService,
 		config:           config,
 		systemSettingSvc: systemSettingSvc,
+		auditSvc:         auditSvc,
 	}
 }
 
@@ -86,8 +97,16 @@ func NewTenantHandler(
 // types.Tenant when CanAccessAllTenants is true (see CreateTenant
 // below), but the recommended shape going forward is name+description.
 type createTenantRequest struct {
-	Name        string `json:"name" binding:"required,min=1,max=128"`
-	Description string `json:"description" binding:"max=512"`
+	Name        string  `json:"name" binding:"required,min=1,max=128"`
+	Description string  `json:"description" binding:"max=512"`
+	// OwnerUserID lets a SystemAdmin pre-populate the future Owner of
+	// the tenant they are creating. Plain users that smuggle this field
+	// are silently ignored (CreateTenant strips it below) — admin-only
+	// tooling typically lives outside this endpoint and uses the
+	// dedicated /system/admin/tenants route instead, but the field is
+	// kept here for defense-in-depth so the existing types.Tenant bind
+	// path can also surface an admin-attributed owner.
+	OwnerUserID *string `json:"owner_user_id,omitempty"`
 }
 
 // updateTenantRequest is the JSON body for PUT /tenants/:id. Only the
@@ -269,6 +288,18 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 			return
 		}
 
+		// Defense-in-depth: a regular user cannot smuggle owner_user_id
+		// through this binding to elevate someone else to Owner of the
+		// tenant they create. SystemAdmins should normally use the
+		// dedicated /system/admin/tenants route instead, but if they
+		// reach this endpoint we honour the field below (admin path
+		// falls through to types.Tenant bind where the field has no
+		// effect — see ownerUserID computation).
+		if !caller.CanAccessAllTenants && req.OwnerUserID != nil && strings.TrimSpace(*req.OwnerUserID) != "" {
+			logger.Warnf(ctx, "Ignoring owner_user_id from non-admin caller %s", caller.ID)
+			req.OwnerUserID = nil
+		}
+
 		// Per-user quota: cap how many tenants a regular user can spin
 		// up via self-service. Without this any authenticated client
 		// can flood `tenants` (and saturate validateStorageBucketUniqueness
@@ -352,11 +383,34 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 	// yet still occupies storage_bucket / name uniqueness slots.
 	// Idempotent: EnsureOwner is a no-op when the row already exists,
 	// so cross-tenant superusers create-and-own through the same path.
+	//
+	// ownerUserID is the user the new tenant will be attached to as
+	// Owner. By default this is the caller; the admin branch above may
+	// resolve it to a different user when req.OwnerUserID (or the
+	// dedicated /system/admin/tenants path) supplies a target.
+	ownerUserID := caller.ID
+	if caller.CanAccessAllTenants && req.OwnerUserID != nil && strings.TrimSpace(*req.OwnerUserID) != "" {
+		target, getErr := h.userService.GetUserByID(ctx, strings.TrimSpace(*req.OwnerUserID))
+		if getErr != nil || target == nil {
+			logger.Warnf(ctx, "owner_user_id refers to non-existent user %q", *req.OwnerUserID)
+			// Roll back the tenant we just created — an unattached
+			// workspace is worse than no workspace at all.
+			if delErr := h.service.DeleteTenant(ctx, createdTenant.ID); delErr != nil {
+				logger.Errorf(ctx, "Rollback DeleteTenant failed for orphan tenant %d: %v",
+					createdTenant.ID, delErr)
+			}
+			appErr := errors.NewBadRequestError("owner_user_id refers to non-existent user").WithDetails(*req.OwnerUserID)
+			c.Error(appErr)
+			return
+		}
+		ownerUserID = target.ID
+	}
+
 	if h.memberService != nil {
-		if _, err := h.memberService.EnsureOwner(ctx, caller.ID, createdTenant.ID); err != nil {
+		if _, err := h.memberService.EnsureOwner(ctx, ownerUserID, createdTenant.ID); err != nil {
 			logger.Errorf(ctx,
 				"Failed to bootstrap owner membership for user %s tenant %d: %v — rolling back tenant",
-				caller.ID, createdTenant.ID, err)
+				ownerUserID, createdTenant.ID, err)
 			if delErr := h.service.DeleteTenant(ctx, createdTenant.ID); delErr != nil {
 				logger.Errorf(ctx,
 					"Rollback DeleteTenant failed for orphan tenant %d: %v",
@@ -375,10 +429,10 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 		// We only do this for non-superusers (the only path that has
 		// a cap) — superusers are exempt above.
 		if !caller.CanAccessAllTenants {
-			memberships, listErr := h.memberService.ListByUser(ctx, caller.ID)
+			memberships, listErr := h.memberService.ListByUser(ctx, ownerUserID)
 			if listErr != nil {
 				logger.Errorf(ctx, "Post-create quota recount failed for user %s tenant %d: %v",
-					caller.ID, createdTenant.ID, listErr)
+					ownerUserID, createdTenant.ID, listErr)
 			} else {
 				ownedNow := 0
 				for _, m := range memberships {
@@ -390,9 +444,9 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 				if cap > 0 && ownedNow > cap {
 					logger.Warnf(ctx,
 						"User %s exceeded tenant quota after concurrent create (%d/%d), rolling back tenant %d",
-						caller.ID, ownedNow, cap, createdTenant.ID,
+						ownerUserID, ownedNow, cap, createdTenant.ID,
 					)
-					if rmErr := h.memberService.RemoveMember(ctx, caller.ID, createdTenant.ID); rmErr != nil {
+					if rmErr := h.memberService.RemoveMember(ctx, ownerUserID, createdTenant.ID); rmErr != nil {
 						logger.Errorf(ctx,
 							"Rollback RemoveMember failed for user %s tenant %d: %v",
 							caller.ID, createdTenant.ID, rmErr,
@@ -416,13 +470,17 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 	// When a tenantless user creates their first workspace, make it their
 	// default login tenant. Roll the just-created resources back if this
 	// finalisation fails so the user is not left with an unreachable tenant.
-	if caller.TenantID == 0 {
+	// Skipped when an admin creates the workspace on someone else's behalf
+	// (ownerUserID != caller.ID) — adopting another user's workspace as
+	// one's own home tenant would be a serious side-effect of a single
+	// admin action, and admin's own home tenant is unaffected.
+	if caller.TenantID == 0 && ownerUserID == caller.ID {
 		caller.TenantID = createdTenant.ID
 		if err := h.userService.UpdateUser(ctx, caller); err != nil {
 			logger.Errorf(ctx, "Failed to set first tenant %d as default for user %s: %v",
 				createdTenant.ID, caller.ID, err)
 			if h.memberService != nil {
-				_ = h.memberService.RemoveMember(ctx, caller.ID, createdTenant.ID)
+				_ = h.memberService.RemoveMember(ctx, ownerUserID, createdTenant.ID)
 			}
 			_ = h.service.DeleteTenant(ctx, createdTenant.ID)
 			c.Error(errors.NewInternalServerError("Failed to finalise default workspace").WithDetails(err.Error()))
@@ -436,6 +494,34 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 		createdTenant.ID,
 		secutils.SanitizeForLog(createdTenant.Name),
 	)
+
+	// Audit row. We only emit when the caller is a SystemAdmin — the
+	// self-service / regular-user path is well-covered by existing
+	// tenant-member events and a per-create audit row would flood the
+	// table. Admin_self_owner distinguishes "admin created a workspace
+	// for themselves" (caller is Owner) from "admin created it for
+	// someone else" (req.OwnerUserID was set).
+	if h.auditSvc != nil && caller.IsSystemAdmin {
+		actorID, _ := types.UserIDFromContext(ctx)
+		details := map[string]any{
+			"target_tenant_id":   createdTenant.ID,
+			"target_tenant_name": createdTenant.Name,
+			"target_status":      createdTenant.Status,
+			"owner_user_id":      ownerUserID,
+			"admin_self_owner":   ownerUserID == caller.ID,
+		}
+		detailsJSON, _ := json.Marshal(details)
+		_ = h.auditSvc.Log(ctx, &types.AuditLog{
+			TenantID:    0,
+			ActorUserID: actorID,
+			ActorRole:   "system_admin",
+			Action:      types.AuditActionSystemTenantCreated,
+			TargetType:  "tenant",
+			TargetID:    strconv.FormatUint(createdTenant.ID, 10),
+			Outcome:     types.AuditOutcomeSuccess,
+			Details:     detailsJSON,
+		})
+	}
 
 	// data carries the created tenant. When the legacy auto-create-key
 	// behaviour is enabled we embed the plaintext token as data.api_key so

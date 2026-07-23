@@ -903,7 +903,9 @@ func RegisterSystemAdminRoutes(
 		// the two coexist without a routing conflict.
 		adminRoutes.GET("/users", handler.ListUsers)
 		adminRoutes.GET("/users/:id", handler.GetUserDetail)
+		adminRoutes.POST("/users", handler.CreateUser)
 		adminRoutes.PATCH("/users/:id", handler.UpdateUser)
+		adminRoutes.DELETE("/users/:id", handler.DeleteUser)
 
 		// P1: platform-wide system settings (DB-backed runtime tunables).
 		// Reads return raw model rows / arrays (no `gin.H{"data":...}`
@@ -928,6 +930,18 @@ func RegisterSystemAdminRoutes(
 			"/tenants/apply-default-storage-quota",
 			handler.ApplyDefaultStorageQuotaToAllTenants,
 		)
+
+		// Workspace management surface for SystemAdmin (P3). Mirrors
+		// the user-management surface above: list, detail, update,
+		// delete. The tenant create path uses the existing
+		// POST /tenants endpoint (SystemAdmin's CanAccessAllTenants
+		// branch already accepts the full Tenant payload) with an
+		// optional owner_user_id body field that admins can use to
+		// attribute a workspace to a non-admin user.
+		adminRoutes.GET("/tenants", handler.ListAllTenantsAdmin)
+		adminRoutes.GET("/tenants/:id", handler.GetTenantDetailAdmin)
+		adminRoutes.PATCH("/tenants/:id", handler.UpdateTenantAdmin)
+		adminRoutes.DELETE("/tenants/:id", handler.DeleteTenantAdmin)
 
 		// Platform-wide audit feed (tenant_id=0 rows). Covers
 		// system.setting_changed / system.admin_promoted /

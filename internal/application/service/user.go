@@ -576,6 +576,51 @@ func (s *userService) UpdateUser(ctx context.Context, user *types.User) error {
 	return s.userRepo.UpdateUser(ctx, user)
 }
 
+// CreateUser provisions a brand-new user from the SystemAdmin surface.
+// The caller (SystemHandler.CreateUser) is responsible for setting ID,
+// Username, Email, PasswordHash, and IsActive; this method enforces
+// the project's password policy, refuses duplicate emails / usernames,
+// and persists the row with TenantID=0 (the tenantless state).
+//
+// Unlike Register, CreateUser does not provision a personal workspace
+// and does not flag the account RegisteredViaInvite — the admin is
+// expected to assign a workspace through the space-management
+// surface (or leave the user in tenantless state). This keeps the
+// admin path orthogonal to the public /auth/register flow: a
+// freshly-admin-created account is observable in the audit log
+// (system.user_created) and lands in the user-management list
+// immediately, so the admin can follow up with a workspace
+// assignment in the same session.
+func (s *userService) CreateUser(ctx context.Context, user *types.User) error {
+	if user == nil {
+		return errors.New("user is required")
+	}
+	if user.ID == "" || user.Username == "" || user.Email == "" {
+		return errors.New("id, username and email are required")
+	}
+	if user.PasswordHash == "" {
+		return errors.New("password hash is required")
+	}
+
+	// Refuse duplicates up-front so the caller can map a clean 400
+	// (the unique-index error from GORM is unhelpfully generic).
+	if existing, _ := s.userRepo.GetUserByEmail(ctx, user.Email); existing != nil {
+		return errors.New("user with this email already exists")
+	}
+	if existing, _ := s.userRepo.GetUserByUsername(ctx, user.Username); existing != nil {
+		return errors.New("user with this username already exists")
+	}
+
+	// Admin-created users always land tenantless. EnsureOwner /
+	// workspace assignment happens later via the admin space surface.
+	user.TenantID = 0
+	user.RegisteredViaInvite = false
+	user.CreatedAt = time.Now()
+	user.UpdatedAt = time.Now()
+
+	return s.userRepo.CreateUser(ctx, user)
+}
+
 // ListSystemAdmins lists users with IsSystemAdmin=true. Thin pass-through
 // to the repository; the handler enforces SystemAdmin gating, so the
 // service does not duplicate the role check here.

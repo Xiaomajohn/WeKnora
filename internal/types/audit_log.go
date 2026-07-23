@@ -140,6 +140,46 @@ const (
 	AuditActionSystemQueueTaskDeleted   AuditAction = "system.queue_task_deleted"
 	AuditActionSystemQueueTaskRunNow    AuditAction = "system.queue_task_run_now"
 	AuditActionSystemQueueTaskCancelled AuditAction = "system.queue_task_cancelled"
+
+	// AuditActionSystemUserCreated fires when a SystemAdmin creates a user
+	// account directly through the user-management surface — it deliberately
+	// bypasses Register (no invite/email flow) and writes TenantID=0 so the
+	// freshly-created user lands in the tenantless state until an admin
+	// assigns a workspace. Details payload carries
+	// {target_email, target_username, password_set}. TenantID=0 because the
+	// change is system-scope.
+	AuditActionSystemUserCreated AuditAction = "system.user_created"
+	// AuditActionSystemUserDeleted fires when a SystemAdmin removes a user
+	// account. Self-delete and last-admin-delete are rejected at the handler
+	// before the row reaches the service. Details payload carries
+	// {target_email, target_username, deleted_memberships} so an audit
+	// reader can see which workspaces lost access. TenantID=0 because the
+	// change is system-scope.
+	AuditActionSystemUserDeleted AuditAction = "system.user_deleted"
+
+	// AuditActionSystemTenantCreated fires when a SystemAdmin provisions a new
+	// workspace on behalf of a user (POST /system/admin/tenants). Distinct
+	// from the owner-initiated POST /tenants path which does NOT emit this
+	// row. Details payload carries {target_tenant_id, target_tenant_name,
+	// target_status, owner_user_id, admin_self_owner} — admin_self_owner
+	// distinguishes "admin created the workspace for themselves" from
+	// "admin created it for someone else". TenantID=0 because the change is
+	// system-scope; the row carries the target tenant id in Details.
+	AuditActionSystemTenantCreated AuditAction = "system.tenant_created"
+	// AuditActionSystemTenantUpdated fires when a SystemAdmin PATCHes a
+	// workspace (name / description / status / storage_quota). Owner-initiated
+	// PUT /tenants/:id does NOT emit this row. Details payload carries
+	// {target_tenant_id, target_tenant_name, changes: {field: {from, to}}}
+	// so an audit reader can diff the workspace's state without snapshot
+	// diffs. TenantID=0 because the change is system-scope.
+	AuditActionSystemTenantUpdated AuditAction = "system.tenant_updated"
+	// AuditActionSystemTenantDeleted fires when a SystemAdmin removes a
+	// workspace. Pre-conditions (no non-owner members, target is not the
+	// admin's last home tenant) are enforced at the handler before the
+	// delete reaches the service. Details payload carries
+	// {target_tenant_id, target_tenant_name, cascade_removed_members}.
+	// TenantID=0 because the change is system-scope.
+	AuditActionSystemTenantDeleted AuditAction = "system.tenant_deleted"
 )
 
 // AuditOutcome distinguishes successful mutations from middleware-level

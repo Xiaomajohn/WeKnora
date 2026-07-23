@@ -28,9 +28,11 @@ import (
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	secutils "github.com/Tencent/WeKnora/internal/utils"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/neo4j/neo4j-go-driver/v6/neo4j"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type runtimeKnowledgeCanceller interface {
@@ -2521,4 +2523,602 @@ func (h *SystemHandler) ResetSystemSetting(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// ============================================================================
+// User management — Create / Delete (SystemAdmin surface)
+// ----------------------------------------------------------------------------
+// P3 surface: SystemAdmin can create a user directly (bypassing the public
+// /auth/register invite flow) and delete an existing account. Create writes
+// TenantID=0 (tenantless) so the admin can immediately follow up with a
+// workspace assignment from the space-management surface; Delete refuses
+// self-delete and the deletion of the last system admin.
+// ============================================================================
+
+// CreateUserRequest is the JSON body for POST /system/admin/users. The
+// password is the only field not exposed through UserInfo / GetUserDetail —
+// we deliberately do not echo it back in any response.
+type CreateUserRequest struct {
+	Username string `json:"username" binding:"required,min=1,max=100"`
+	Email    string `json:"email"    binding:"required,email"`
+	Password string `json:"password" binding:"required,min=8,max=32"`
+	IsActive *bool  `json:"is_active,omitempty"`
+}
+
+// CreateUser godoc
+// @Summary      Create a user account (SystemAdmin only)
+// @Description  Provisions a brand-new account directly, bypassing the
+// @Description  public /auth/register invite flow. The freshly-created
+// @Description  user lands with TenantID=0 (tenantless); assign a workspace
+// @Description  through the space-management surface if needed. Password
+// @Description  must satisfy the project password policy
+// @Description  (8-32 chars, must include a letter and a number).
+// @Description  Duplicate email / username returns 400.
+// @Tags         System Admin
+// @Accept       json
+// @Produce      json
+// @Param        request body CreateUserRequest true "New user fields"
+// @Success      201 {object} types.UserInfo "User created"
+// @Failure      400 {object} map[string]interface{} "Validation / collision / weak password"
+// @Failure      403 {object} map[string]interface{} "Forbidden: not a system admin"
+// @Router       /system/admin/users [post]
+func (h *SystemHandler) CreateUser(c *gin.Context) {
+	ctx := logger.CloneContext(c.Request.Context())
+
+	var req CreateUserRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+	if err := service.ValidatePasswordPolicy(req.Password); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	username := strings.TrimSpace(req.Username)
+	email := strings.TrimSpace(strings.ToLower(req.Email))
+	if username == "" || email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "username and email are required"})
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		logger.Errorf(ctx, "Failed to hash password during admin user creation: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
+		return
+	}
+	isActive := true
+	if req.IsActive != nil {
+		isActive = *req.IsActive
+	}
+	newUser := &types.User{
+		ID:           uuid.New().String(),
+		Username:     username,
+		Email:        email,
+		PasswordHash: string(hash),
+		IsActive:     isActive,
+	}
+
+	if err := h.userSvc.CreateUser(ctx, newUser); err != nil {
+		msg := err.Error()
+		lower := strings.ToLower(msg)
+		if strings.Contains(lower, "already exists") || strings.Contains(lower, "duplicate") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+			return
+		}
+		logger.Errorf(ctx, "CreateUser failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
+		return
+	}
+
+	h.emitAdminAudit(ctx, types.AuditActionSystemUserCreated, newUser, map[string]any{
+		"target_email":    newUser.Email,
+		"target_username": newUser.Username,
+		"password_set":    true,
+	})
+
+	c.JSON(http.StatusCreated, newUser.ToUserInfo())
+}
+
+// DeleteUser godoc
+// @Summary      Delete a user account (SystemAdmin only)
+// @Description  Removes the target user's account. Self-delete is
+// @Description  rejected (the admin should hand the platform to a
+// @Description  peer before leaving). Deleting the last system
+// @Description  administrator is rejected (would lock the platform out
+// @Description  of administrative recovery). Tenant memberships of the
+// @Description  removed user are detached and counted in the audit
+// @Description  details so an audit reader can see which workspaces
+// @Description  lost access.
+// @Tags         System Admin
+// @Produce      json
+// @Param        id path string true "User UUID"
+// @Success      200 {object} map[string]interface{} "{ message: string }"
+// @Failure      400 {object} map[string]interface{} "Self-delete / last-admin guard"
+// @Failure      403 {object} map[string]interface{} "Forbidden: not a system admin"
+// @Failure      404 {object} map[string]interface{} "User not found"
+// @Router       /system/admin/users/{id} [delete]
+func (h *SystemHandler) DeleteUser(c *gin.Context) {
+	ctx := logger.CloneContext(c.Request.Context())
+
+	userID := strings.TrimSpace(c.Param("id"))
+	if userID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "User id is required"})
+		return
+	}
+	target, err := h.userSvc.GetUserByID(ctx, userID)
+	if err != nil || target == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+	callerID, _ := types.UserIDFromContext(ctx)
+	if callerID == target.ID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot delete your own account; ask another system administrator"})
+		return
+	}
+	if target.IsSystemAdmin {
+		// Count remaining active system admins. If this is the only
+		// one (other than the caller, who is already excluded), refuse.
+		// We use ListSystemAdmins(_, 0, 1000) — the list is small in
+		// practice, and the offset/limit default of the underlying repo
+		// is well-bounded.
+		admins, _, lerr := h.userSvc.ListSystemAdmins(ctx, 0, 1000)
+		if lerr != nil {
+			logger.Errorf(ctx, "ListSystemAdmins failed during delete-last-admin guard: %v", lerr)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify last-admin guard"})
+			return
+		}
+		remaining := 0
+		for _, a := range admins {
+			if a != nil && a.ID != target.ID && a.IsActive {
+				remaining++
+			}
+		}
+		if remaining == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot delete the last active system administrator"})
+			return
+		}
+	}
+
+	// Snapshot memberships before deletion so the audit row records
+	// how many workspaces lost access. Best-effort — an empty slice
+	// is fine, the repo's user delete will still cascade.
+	deletedMemberships := 0
+	if h.tenantMemberService != nil {
+		if rows, lerr := h.tenantMemberService.ListByUser(ctx, target.ID); lerr == nil {
+			deletedMemberships = len(rows)
+		}
+	}
+
+	if err := h.userSvc.DeleteUser(ctx, target.ID); err != nil {
+		logger.Errorf(ctx, "DeleteUser %s failed: %v", target.ID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete user"})
+		return
+	}
+
+	h.emitAdminAudit(ctx, types.AuditActionSystemUserDeleted, target, map[string]any{
+		"target_email":         target.Email,
+		"target_username":      target.Username,
+		"deleted_memberships":  deletedMemberships,
+	})
+	c.JSON(http.StatusOK, gin.H{"message": "User deleted"})
+}
+
+// ============================================================================
+// Workspace management — SystemAdmin surface (CRUD on /system/admin/tenants)
+// ----------------------------------------------------------------------------
+// The 5 endpoints below back the SystemAdmin space-management page. They
+// share the SystemHandler instance and therefore the auditSvc / tenantSvc /
+// userSvc / tenantMemberService dependencies that already exist for the
+// user-management surface.
+// ============================================================================
+
+// AdminTenantListItem is one row of GET /system/admin/tenants. Augments
+// the raw *types.Tenant with member_count and owner_username so the
+// management table can render the row without a second round-trip.
+type AdminTenantListItem struct {
+	*types.Tenant
+	MemberCount   int    `json:"member_count"`
+	OwnerUsername string `json:"owner_username,omitempty"`
+}
+
+// AdminTenantListResponse is the paginated response for
+// GET /system/admin/tenants. Mirrors AdminUserListResponse so the
+// frontend paginates the same way.
+type AdminTenantListResponse struct {
+	Total int64                 `json:"total"`
+	Items []*AdminTenantListItem `json:"items"`
+	Page  int                   `json:"page"`
+	Size  int                   `json:"page_size"`
+}
+
+// updateTenantAdminRequest is the PATCH payload for editing a workspace
+// from the SystemAdmin surface. Distinct from tenant.go's
+// updateTenantRequest because the admin surface needs to mutate status
+// and storage_quota too (Owner-facing PUT /tenants/:id deliberately
+// hides both fields). All fields are pointers so empty PATCHes are
+// idempotent no-ops.
+type updateTenantAdminRequest struct {
+	Name           *string `json:"name,omitempty"            binding:"omitempty,min=1,max=128"`
+	Description    *string `json:"description,omitempty"     binding:"omitempty,max=512"`
+	Status         *string `json:"status,omitempty"          binding:"omitempty,oneof=active suspended"`
+	StorageQuotaGB *int64  `json:"storage_quota_gb,omitempty" binding:"omitempty,min=1"`
+}
+
+// loadTenantOwnerUsername is the helper that powers both
+// ListAllTenantsAdmin and GetTenantDetailAdmin. It returns the
+// username of the first active owner found in the tenant's members,
+// or "" when no owner exists (defensive — EnsureOwner should always
+// provide one). Best-effort: a missing tenantMemberService or a
+// failed lookup yields an empty string rather than failing the
+// surrounding endpoint, so the table renders even when the
+// dependency graph is partial.
+func (h *SystemHandler) loadTenantOwnerUsername(ctx context.Context, tenantID uint64) string {
+	if h.tenantMemberService == nil {
+		return ""
+	}
+	members, err := h.tenantMemberService.ListByTenant(ctx, tenantID)
+	if err != nil {
+		logger.Warnf(ctx,
+			"loadTenantOwnerUsername: ListByTenant failed for tenant %d: %v",
+			tenantID, err)
+		return ""
+	}
+	ownerIDs := make([]string, 0, 1)
+	for _, m := range members {
+		if m != nil && m.Role == types.TenantRoleOwner && m.Status == types.TenantMemberStatusActive {
+			ownerIDs = append(ownerIDs, m.UserID)
+		}
+	}
+	if len(ownerIDs) == 0 {
+		return ""
+	}
+	if h.userSvc == nil {
+		return ""
+	}
+	users, err := h.userSvc.GetUsersByIDs(ctx, ownerIDs)
+	if err != nil || users == nil {
+		return ""
+	}
+	if u, ok := users[ownerIDs[0]]; ok && u != nil {
+		return u.Username
+	}
+	return ""
+}
+
+// ListAllTenantsAdmin godoc
+// @Summary      List all workspaces (SystemAdmin only)
+// @Description  Paginated, optionally filtered view of every workspace.
+// @Description  keyword matches workspace name case-insensitively; empty
+// @Description  keyword lists everyone, newest first. Each row carries
+// @Description  member_count and owner_username so the front-end table
+// @Description  renders without a follow-up call.
+// @Tags         System Admin
+// @Produce      json
+// @Param        keyword  query string false "Substring match against workspace name"
+// @Param        page     query int    false "1-based page number" default(1)
+// @Param        page_size query int   false "Page size (max 200)" default(20)
+// @Success      200 {object} AdminTenantListResponse "Workspaces retrieved successfully"
+// @Failure      403 {object} map[string]interface{} "Forbidden: not a system admin"
+// @Router       /system/admin/tenants [get]
+func (h *SystemHandler) ListAllTenantsAdmin(c *gin.Context) {
+	ctx := logger.CloneContext(c.Request.Context())
+
+	page := 1
+	pageSize := 20
+	if v := c.Query("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			page = n
+		}
+	}
+	if v := c.Query("page_size"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			pageSize = n
+		}
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	keyword := strings.TrimSpace(c.Query("keyword"))
+
+	tenants, total, err := h.tenantSvc.SearchTenants(ctx, keyword, 0, page, pageSize)
+	if err != nil {
+		logger.Errorf(ctx, "SearchTenants (admin) failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list workspaces"})
+		return
+	}
+
+	items := make([]*AdminTenantListItem, 0, len(tenants))
+	for _, t := range tenants {
+		if t == nil {
+			continue
+		}
+		item := &AdminTenantListItem{
+			Tenant:        t,
+			MemberCount:   0,
+			OwnerUsername: h.loadTenantOwnerUsername(ctx, t.ID),
+		}
+		if h.tenantMemberService != nil {
+			if members, merr := h.tenantMemberService.ListByTenant(ctx, t.ID); merr == nil {
+				item.MemberCount = len(members)
+			}
+		}
+		items = append(items, item)
+	}
+	if items == nil {
+		items = []*AdminTenantListItem{}
+	}
+
+	c.JSON(http.StatusOK, AdminTenantListResponse{
+		Total: total,
+		Items: items,
+		Page:  page,
+		Size:  pageSize,
+	})
+}
+
+// GetTenantDetailAdmin godoc
+// @Summary      Get a workspace's admin view (SystemAdmin only)
+// @Description  Returns the workspace record plus member_count and
+// @Description  owner_username for the SystemAdmin detail drawer.
+// @Description  Returns 404 when the workspace id is unknown.
+// @Tags         System Admin
+// @Produce      json
+// @Param        id path int true "Workspace ID"
+// @Success      200 {object} AdminTenantListItem "Workspace retrieved"
+// @Failure      403 {object} map[string]interface{} "Forbidden: not a system admin"
+// @Failure      404 {object} map[string]interface{} "Workspace not found"
+// @Router       /system/admin/tenants/{id} [get]
+func (h *SystemHandler) GetTenantDetailAdmin(c *gin.Context) {
+	ctx := logger.CloneContext(c.Request.Context())
+
+	idStr := strings.TrimSpace(c.Param("id"))
+	id, perr := strconv.ParseUint(idStr, 10, 64)
+	if perr != nil || id == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid workspace id"})
+		return
+	}
+	tenant, err := h.tenantSvc.GetTenantByID(ctx, id)
+	if err != nil || tenant == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Workspace not found"})
+		return
+	}
+	item := &AdminTenantListItem{
+		Tenant:        tenant,
+		OwnerUsername: h.loadTenantOwnerUsername(ctx, tenant.ID),
+	}
+	if h.tenantMemberService != nil {
+		if members, merr := h.tenantMemberService.ListByTenant(ctx, tenant.ID); merr == nil {
+			item.MemberCount = len(members)
+		}
+	}
+	c.JSON(http.StatusOK, item)
+}
+
+// UpdateTenantAdmin godoc
+// @Summary      Update a workspace (SystemAdmin only)
+// @Description  PATCH-style update of name, description, status and/or
+// @Description  storage_quota (in GiB). All fields are pointers so an
+// @Description  empty body is a no-op. The Owner-facing PUT /tenants/:id
+// @Description  intentionally hides status and storage_quota; this
+// @Description  endpoint is the SystemAdmin's separate edit surface.
+// @Description  Every applied field is recorded in the audit log with
+// @Description  its before/after value.
+// @Tags         System Admin
+// @Accept       json
+// @Produce      json
+// @Param        id      path   int                     true  "Workspace ID"
+// @Param        request body   updateTenantAdminRequest true  "Fields to patch"
+// @Success      200 {object} types.TenantInfo "Workspace updated"
+// @Failure      400 {object} map[string]interface{} "Validation / collision"
+// @Failure      403 {object} map[string]interface{} "Forbidden: not a system admin"
+// @Failure      404 {object} map[string]interface{} "Workspace not found"
+// @Router       /system/admin/tenants/{id} [patch]
+func (h *SystemHandler) UpdateTenantAdmin(c *gin.Context) {
+	ctx := logger.CloneContext(c.Request.Context())
+
+	idStr := strings.TrimSpace(c.Param("id"))
+	id, perr := strconv.ParseUint(idStr, 10, 64)
+	if perr != nil || id == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid workspace id"})
+		return
+	}
+	tenant, err := h.tenantSvc.GetTenantByID(ctx, id)
+	if err != nil || tenant == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Workspace not found"})
+		return
+	}
+	var req updateTenantAdminRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+	if req.Name == nil && req.Description == nil && req.Status == nil && req.StorageQuotaGB == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No fields to update"})
+		return
+	}
+	changes := map[string]map[string]any{}
+	if req.Name != nil {
+		newName := strings.TrimSpace(*req.Name)
+		if newName == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "name cannot be empty"})
+			return
+		}
+		if newName != tenant.Name {
+			changes["name"] = map[string]any{"from": tenant.Name, "to": newName}
+			tenant.Name = newName
+		}
+	}
+	if req.Description != nil {
+		newDesc := strings.TrimSpace(*req.Description)
+		if newDesc != tenant.Description {
+			changes["description"] = map[string]any{"from": tenant.Description, "to": newDesc}
+			tenant.Description = newDesc
+		}
+	}
+	if req.Status != nil {
+		newStatus := *req.Status
+		if newStatus != tenant.Status {
+			changes["status"] = map[string]any{"from": tenant.Status, "to": newStatus}
+			tenant.Status = newStatus
+		}
+	}
+	if req.StorageQuotaGB != nil {
+		newBytes := *req.StorageQuotaGB * 1024 * 1024 * 1024
+		if newBytes != tenant.StorageQuota {
+			changes["storage_quota"] = map[string]any{
+				"from": tenant.StorageQuota,
+				"to":   newBytes,
+			}
+			tenant.StorageQuota = newBytes
+		}
+	}
+	if len(changes) == 0 {
+		// Caller sent keys but every value matched the current row.
+		// No-op success — no audit row, mirroring UpdateUser's policy
+		// (keeps probe noise out of the audit table).
+		c.JSON(http.StatusOK, updated)
+		return
+	}
+	updated, err := h.tenantSvc.UpdateTenant(ctx, tenant)
+	if err != nil {
+		logger.Errorf(ctx, "UpdateTenant (admin) failed for tenant %d: %v", id, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update workspace"})
+		return
+	}
+	if h.auditSvc != nil {
+		actorID, _ := types.UserIDFromContext(ctx)
+		details, _ := json.Marshal(map[string]any{
+			"target_tenant_id":   updated.ID,
+			"target_tenant_name": updated.Name,
+			"changes":            changes,
+		})
+		_ = h.auditSvc.Log(ctx, &types.AuditLog{
+			TenantID:    0,
+			ActorUserID: actorID,
+			ActorRole:   "system_admin",
+			Action:      types.AuditActionSystemTenantUpdated,
+			TargetType:  "tenant",
+			TargetID:    strconv.FormatUint(updated.ID, 10),
+			Outcome:     types.AuditOutcomeSuccess,
+			Details:     types.JSON(details),
+		})
+	}
+	c.JSON(http.StatusOK, updated)
+}
+
+// DeleteTenantAdmin godoc
+// @Summary      Delete a workspace (SystemAdmin only)
+// @Description  Removes the workspace. Pre-conditions:
+// @Description  1) the workspace must not have any non-owner members —
+// @Description     callers are expected to remove them first;
+// @Description  2) deleting the admin's last active home workspace is
+// @Description     rejected to avoid locking the admin out of the
+// @Description     platform. The transaction is best-effort: members
+// @Description     are soft-deleted in a loop, then DeleteTenant is
+// @Description     called.
+// @Tags         System Admin
+// @Produce      json
+// @Param        id path int true "Workspace ID"
+// @Success      200 {object} map[string]interface{} "{ message: string }"
+// @Failure      400 {object} map[string]interface{} "Pre-condition failed"
+// @Failure      403 {object} map[string]interface{} "Forbidden: not a system admin"
+// @Failure      404 {object} map[string]interface{} "Workspace not found"
+// @Router       /system/admin/tenants/{id} [delete]
+func (h *SystemHandler) DeleteTenantAdmin(c *gin.Context) {
+	ctx := logger.CloneContext(c.Request.Context())
+
+	idStr := strings.TrimSpace(c.Param("id"))
+	id, perr := strconv.ParseUint(idStr, 10, 64)
+	if perr != nil || id == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid workspace id"})
+		return
+	}
+	tenant, err := h.tenantSvc.GetTenantByID(ctx, id)
+	if err != nil || tenant == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Workspace not found"})
+		return
+	}
+	callerID, _ := types.UserIDFromContext(ctx)
+	callerIsOwner := false
+	callerIsHome := false
+	cascadeRemoved := 0
+	if h.tenantMemberService != nil {
+		if members, merr := h.tenantMemberService.ListByTenant(ctx, tenant.ID); merr == nil {
+			// First pass: detect whether the caller is the owner and
+			// whether this is their home tenant. Second pass: cascade
+			// remove non-owner members.
+			for _, m := range members {
+				if m == nil || m.Status != types.TenantMemberStatusActive {
+					continue
+				}
+				if m.UserID == callerID && m.Role == types.TenantRoleOwner {
+					callerIsOwner = true
+					if caller, gerr := h.userSvc.GetUserByID(ctx, callerID); gerr == nil && caller != nil && caller.TenantID == tenant.ID {
+						callerIsHome = true
+					}
+				}
+			}
+			if callerIsOwner && callerIsHome {
+				// Check whether the caller has another active tenant;
+				// if this is their last one, refuse.
+				ownedOthers := 0
+				if rows, lerr := h.tenantMemberService.ListByUser(ctx, callerID); lerr == nil {
+					for _, m := range rows {
+						if m == nil || m.Status != types.TenantMemberStatusActive {
+							continue
+						}
+						if m.Role == types.TenantRoleOwner && m.TenantID != tenant.ID {
+							ownedOthers++
+						}
+					}
+				}
+				if ownedOthers == 0 {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot delete your only active workspace"})
+					return
+				}
+			}
+			for _, m := range members {
+				if m == nil || m.Status != types.TenantMemberStatusActive {
+					continue
+				}
+				if m.Role == types.TenantRoleOwner {
+					continue
+				}
+				if rerr := h.tenantMemberService.RemoveMember(ctx, m.UserID, tenant.ID); rerr != nil {
+					logger.Errorf(ctx,
+						"Cascade RemoveMember failed for user %s tenant %d: %v",
+						m.UserID, tenant.ID, rerr)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to clear workspace members"})
+					return
+				}
+				cascadeRemoved++
+			}
+		}
+	}
+
+	if err := h.tenantSvc.DeleteTenant(ctx, tenant.ID); err != nil {
+		logger.Errorf(ctx, "DeleteTenant (admin) failed for tenant %d: %v", tenant.ID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete workspace"})
+		return
+	}
+	if h.auditSvc != nil {
+		actorID, _ := types.UserIDFromContext(ctx)
+		details, _ := json.Marshal(map[string]any{
+			"target_tenant_id":          tenant.ID,
+			"target_tenant_name":        tenant.Name,
+			"cascade_removed_members":   cascadeRemoved,
+		})
+		_ = h.auditSvc.Log(ctx, &types.AuditLog{
+			TenantID:    0,
+			ActorUserID: actorID,
+			ActorRole:   "system_admin",
+			Action:      types.AuditActionSystemTenantDeleted,
+			TargetType:  "tenant",
+			TargetID:    strconv.FormatUint(tenant.ID, 10),
+			Outcome:     types.AuditOutcomeSuccess,
+			Details:     types.JSON(details),
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Workspace deleted"})
 }

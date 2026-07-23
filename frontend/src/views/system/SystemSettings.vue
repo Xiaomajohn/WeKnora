@@ -101,6 +101,7 @@
 
       <t-tabs v-model="activeSettingsSection" class="settings-section-tabs">
         <t-tab-panel value="users" :label="sectionTabLabel('users')" />
+        <t-tab-panel value="spaces" :label="sectionTabLabel('spaces')" />
         <t-tab-panel value="access" :label="sectionTabLabel('access')" />
         <t-tab-panel value="tenant" :label="sectionTabLabel('tenant')" />
         <t-tab-panel value="runtime" :label="sectionTabLabel('runtime')" />
@@ -121,6 +122,15 @@
         means only admins ever reach here.
       -->
       <UserManagement v-if="activeSettingsSection === 'users'" />
+
+      <!--
+        Space management surface. Mirrors the UserManagement render
+        pattern (sibling of settings-section-panel) so the same layout
+        CSS hooks don't bleed into the workspace table. The router guard
+        ensures only SystemAdmins can land here; the component itself
+        does not re-check role.
+      -->
+      <SpaceManagement v-if="activeSettingsSection === 'spaces'" />
 
       <section class="settings-section-panel" :aria-labelledby="`settings-section-${activeSettingsSection}`">
         <div class="settings-section-intro">
@@ -687,6 +697,7 @@ import {
 } from '@/api/system'
 import { useAuthStore } from '@/stores/auth'
 import UserManagement from './UserManagement.vue'
+import SpaceManagement from './SpaceManagement.vue'
 
 const authStore = useAuthStore()
 const currentUserId = computed(() => authStore.currentUserId)
@@ -802,7 +813,7 @@ const savedKey = ref<string | null>(null)
 const saveAnnouncement = ref('')
 let savedKeyTimer: ReturnType<typeof setTimeout> | null = null
 
-type SettingsSection = 'access' | 'tenant' | 'runtime' | 'security' | 'users' | 'other'
+type SettingsSection = 'access' | 'tenant' | 'runtime' | 'security' | 'users' | 'spaces' | 'other'
 
 // Product-oriented order, rather than the registry's alphabetical key order.
 // Unknown/out-of-band rows remain visible in a conditional "Other" tab so the
@@ -829,6 +840,8 @@ const SETTINGS_SECTION_KEYS: Record<Exclude<SettingsSection, 'other'>, readonly 
     'model.max_concurrency',
   ],
   security: ['ssrf.whitelist'],
+  users: [],
+  spaces: [],
 }
 
 const activeSettingsSection = ref<SettingsSection>('access')
@@ -861,12 +874,13 @@ const overriddenCount = computed(() => settings.value.filter(hasOverride).length
 const restartRequiredCount = computed(() => settings.value.filter((item) => item.requires_restart).length)
 
 function sectionTabLabel(section: SettingsSection): string {
-  if (section === 'users') {
-    // The "users & permissions" tab has no settings keys and shows no
-    // count badge (the user total lives inside UserManagement.vue so
-    // users-tab text isn't tied to a parent-component fetch). Plain tab
-    // label — mirrors the i18n contract for the other special-case tabs
-    // (e.g. the audit drawer header), which also drop the {count} slot.
+  if (section === 'users' || section === 'spaces') {
+    // The "users & permissions" and "spaces" tabs have no settings keys
+    // and show no count badge (the row totals live inside the
+    // UserManagement / SpaceManagement components so the tab text isn't
+    // tied to a parent-component fetch). Plain tab label — mirrors the
+    // i18n contract for the other special-case tabs (e.g. the audit
+    // drawer header), which also drop the {count} slot.
     return t(`system.globalSettings.sections.${section}.tab`)
   }
   const count = section === 'other'
