@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/Tencent/WeKnora/internal/config"
@@ -97,8 +98,8 @@ func NewTenantHandler(
 // types.Tenant when CanAccessAllTenants is true (see CreateTenant
 // below), but the recommended shape going forward is name+description.
 type createTenantRequest struct {
-	Name        string  `json:"name" binding:"required,min=1,max=128"`
-	Description string  `json:"description" binding:"max=512"`
+	Name        string `json:"name" binding:"required,min=1,max=128"`
+	Description string `json:"description" binding:"max=512"`
 	// OwnerUserID lets a SystemAdmin pre-populate the future Owner of
 	// the tenant they are creating. Plain users that smuggle this field
 	// are silently ignored (CreateTenant strips it below) — admin-only
@@ -258,7 +259,25 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 		return
 	}
 
-	var tenantData types.Tenant
+	var (
+		tenantData types.Tenant
+		req        createTenantRequest
+	)
+
+	// Parse the request body once. ShouldBindBodyWith caches the raw
+	// body on the gin.Context, so the admin branch below can still call
+	// c.ShouldBindJSON(&tenantData) to bind the legacy full-payload
+	// shape — both reads come from the same cached bytes. We need
+	// `req` available on both sides of the if/else below so the admin
+	// path can also surface owner_user_id (otherwise the ownerUserID
+	// block would never see it when a cross-tenant superuser supplies
+	// one through the legacy payload).
+	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
+		logger.Error(ctx, "Failed to parse request parameters", err)
+		appErr := errors.NewValidationError("Invalid request parameters").WithDetails(err.Error())
+		c.Error(appErr)
+		return
+	}
 
 	if caller.CanAccessAllTenants {
 		// Backward-compatible path for cross-tenant superusers: accept
@@ -280,13 +299,8 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 		// TenantService.CreateTenant (status="active", storage_quota
 		// default, retriever engines from RETRIEVE_DRIVER). API keys are
 		// created explicitly through the integration API-key list.
-		var req createTenantRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			logger.Error(ctx, "Failed to parse request parameters", err)
-			appErr := errors.NewValidationError("Invalid request parameters").WithDetails(err.Error())
-			c.Error(appErr)
-			return
-		}
+		// (req is already bound at the top of this function so we
+		// can read owner_user_id from it on the admin path too.)
 
 		// Defense-in-depth: a regular user cannot smuggle owner_user_id
 		// through this binding to elevate someone else to Owner of the

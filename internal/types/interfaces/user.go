@@ -79,6 +79,13 @@ type UserService interface {
 	GetCurrentUser(ctx context.Context) (*types.User, error)
 	// SearchUsers searches users by username or email
 	SearchUsers(ctx context.Context, query string, limit int) ([]*types.User, error)
+	// ListUsers lists every user with pagination. Used by the
+	// SystemAdmin /api/v1/system/admin/users endpoint (gated to
+	// SystemAdmin callers) to render the full users table. offset is
+	// the number of rows to skip, limit is the max rows to return. The
+	// result is unsorted; the handler layer applies the desired order
+	// (currently newest-first by creation time) before serialising.
+	ListUsers(ctx context.Context, offset, limit int) ([]*types.User, error)
 	// ListSystemAdmins lists users with IsSystemAdmin=true.
 	// Returns the page of admins plus the total count (for pagination UI);
 	// callers pass offset/limit to page through results. Used by the

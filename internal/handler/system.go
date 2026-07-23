@@ -82,15 +82,15 @@ func NewSystemHandler(cfg *config.Config,
 	tenantMemberService interfaces.TenantMemberService,
 ) *SystemHandler {
 	return &SystemHandler{
-		cfg:                cfg,
-		neo4jDriver:        neo4jDriver,
-		documentReader:     documentReader,
-		tenantSvc:          tenantSvc,
-		userSvc:            userSvc,
-		systemSettingSvc:   systemSettingSvc,
-		auditSvc:           auditSvc,
-		taskInspector:      taskInspector,
-		knowledgeSvc:       knowledgeSvc,
+		cfg:                 cfg,
+		neo4jDriver:         neo4jDriver,
+		documentReader:      documentReader,
+		tenantSvc:           tenantSvc,
+		userSvc:             userSvc,
+		systemSettingSvc:    systemSettingSvc,
+		auditSvc:            auditSvc,
+		taskInspector:       taskInspector,
+		knowledgeSvc:        knowledgeSvc,
 		tenantMemberService: tenantMemberService,
 	}
 }
@@ -1468,12 +1468,12 @@ func (h *SystemHandler) ResetUserPassword(c *gin.Context) {
 // projection) because the management UI needs status / joined_at /
 // home-tenant marker; types.Membership only carries role + name.
 type UserMembershipView struct {
-	TenantID     uint64                    `json:"tenant_id"`
-	TenantName   string                    `json:"tenant_name"`
-	Role         types.TenantRole          `json:"role"`
-	Status       types.TenantMemberStatus  `json:"status"`
-	JoinedAt     time.Time                 `json:"joined_at"`
-	IsHomeTenant bool                      `json:"is_home_tenant"`
+	TenantID     uint64                   `json:"tenant_id"`
+	TenantName   string                   `json:"tenant_name"`
+	Role         types.TenantRole         `json:"role"`
+	Status       types.TenantMemberStatus `json:"status"`
+	JoinedAt     time.Time                `json:"joined_at"`
+	IsHomeTenant bool                     `json:"is_home_tenant"`
 }
 
 // AdminUserListItem is one row of GET /system/admin/users. Embeds the
@@ -1492,7 +1492,7 @@ type AdminUserListItem struct {
 // GET /system/admin/users. Total mirrors ListSystemAdmins so the
 // front-end renders pagination metadata without a follow-up call.
 type AdminUserListResponse struct {
-	Total int64              `json:"total"`
+	Total int64                `json:"total"`
 	Users []*AdminUserListItem `json:"users"`
 }
 
@@ -2697,9 +2697,9 @@ func (h *SystemHandler) DeleteUser(c *gin.Context) {
 	}
 
 	h.emitAdminAudit(ctx, types.AuditActionSystemUserDeleted, target, map[string]any{
-		"target_email":         target.Email,
-		"target_username":      target.Username,
-		"deleted_memberships":  deletedMemberships,
+		"target_email":        target.Email,
+		"target_username":     target.Username,
+		"deleted_memberships": deletedMemberships,
 	})
 	c.JSON(http.StatusOK, gin.H{"message": "User deleted"})
 }
@@ -2726,10 +2726,10 @@ type AdminTenantListItem struct {
 // GET /system/admin/tenants. Mirrors AdminUserListResponse so the
 // frontend paginates the same way.
 type AdminTenantListResponse struct {
-	Total int64                 `json:"total"`
+	Total int64                  `json:"total"`
 	Items []*AdminTenantListItem `json:"items"`
-	Page  int                   `json:"page"`
-	Size  int                   `json:"page_size"`
+	Page  int                    `json:"page"`
+	Size  int                    `json:"page_size"`
 }
 
 // updateTenantAdminRequest is the PATCH payload for editing a workspace
@@ -2976,8 +2976,11 @@ func (h *SystemHandler) UpdateTenantAdmin(c *gin.Context) {
 	if len(changes) == 0 {
 		// Caller sent keys but every value matched the current row.
 		// No-op success — no audit row, mirroring UpdateUser's policy
-		// (keeps probe noise out of the audit table).
-		c.JSON(http.StatusOK, updated)
+		// (keeps probe noise out of the audit table). We return the
+		// in-memory tenant (which is identical to the DB row at this
+		// point since no field actually changed) instead of a nil
+		// pointer, so the response shape stays stable for callers.
+		c.JSON(http.StatusOK, tenant)
 		return
 	}
 	updated, err := h.tenantSvc.UpdateTenant(ctx, tenant)
@@ -3105,9 +3108,9 @@ func (h *SystemHandler) DeleteTenantAdmin(c *gin.Context) {
 	if h.auditSvc != nil {
 		actorID, _ := types.UserIDFromContext(ctx)
 		details, _ := json.Marshal(map[string]any{
-			"target_tenant_id":          tenant.ID,
-			"target_tenant_name":        tenant.Name,
-			"cascade_removed_members":   cascadeRemoved,
+			"target_tenant_id":        tenant.ID,
+			"target_tenant_name":      tenant.Name,
+			"cascade_removed_members": cascadeRemoved,
 		})
 		_ = h.auditSvc.Log(ctx, &types.AuditLog{
 			TenantID:    0,

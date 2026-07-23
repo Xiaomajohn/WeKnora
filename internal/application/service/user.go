@@ -630,6 +630,19 @@ func (s *userService) ListSystemAdmins(
 	return s.userRepo.ListSystemAdmins(ctx, offset, limit)
 }
 
+// ListUsers returns a paginated list of every user. Thin pass-through
+// to the repository — the SystemAdmin handler in system.go already
+// gates the call, so the service does not duplicate the role check
+// here. Ordering and total-count inference are handled in the handler
+// (see ListUsers there); this method intentionally stays a one-to-one
+// passthrough to the repo so future backends (e.g. a no-SQL store) can
+// take over the listing without rewriting the service.
+func (s *userService) ListUsers(
+	ctx context.Context, offset, limit int,
+) ([]*types.User, error) {
+	return s.userRepo.ListUsers(ctx, offset, limit)
+}
+
 // RevokeSystemAdmin removes system-admin privileges through the
 // repository's transactional guard so concurrent revokes cannot remove
 // the final administrator.
