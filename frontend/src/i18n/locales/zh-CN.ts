@@ -260,7 +260,7 @@ export default {
         },
         done: {
           title: "解析完成后即可使用",
-          desc: "文档解析入库后，可在对话中 @ 本知识库提问，回答会附带引用来源。",
+          desc: "文档解析入库后，可在对话中 {'@'} 本知识库提问，回答会附带引用来源。",
         },
       },
     },
@@ -268,7 +268,7 @@ export default {
       steps: {
         kb: {
           title: "选择知识范围",
-          desc: "点击 @ 可指定一个或多个知识库/文件，仅基于选中内容回答；不选则按当前智能体配置检索。",
+          desc: "点击 {'@'} 可指定一个或多个知识库/文件，仅基于选中内容回答；不选则按当前智能体配置检索。",
         },
         input: {
           title: "输入你的问题",
@@ -1766,7 +1766,7 @@ export default {
     title: "完成注册",
     subtitle: "您被邀请加入「{tenant}」",
     email: "邮箱",
-    emailPlaceholder: "your@example.com",
+    emailPlaceholder: "your{'@'}example.com",
     emailHint: "用您自己的邮箱注册即可。",
     emailInvalid: "请输入有效的邮箱地址",
     username: "姓名",
@@ -3028,7 +3028,7 @@ export default {
             isActive: "账号状态",
           },
           usernamePlaceholder: "2-100 个字符",
-          emailPlaceholder: "example@domain.com",
+          emailPlaceholder: "example{'@'}domain.com",
           passwordPlaceholder: "8-32 个字符，包含字母和数字",
           confirmPasswordPlaceholder: "再次输入密码",
           submit: "创建用户",
@@ -3085,7 +3085,7 @@ export default {
             isActive: "账号状态",
           },
           usernamePlaceholder: "2-32 个字符",
-          emailPlaceholder: "example@domain.com",
+          emailPlaceholder: "example{'@'}domain.com",
           noChanges: "没有需要保存的修改",
           success: "已保存用户账户修改",
           failed: "保存失败",

@@ -260,7 +260,7 @@ export default {
         },
         done: {
           title: 'Ready after parsing',
-          desc: 'Once documents are indexed, mention this knowledge base in chat with @ to get answers with citations.',
+          desc: 'Once documents are indexed, mention this knowledge base in chat with {\'@\'} to get answers with citations.',
         },
       },
     },
@@ -268,7 +268,7 @@ export default {
       steps: {
         kb: {
           title: 'Choose knowledge scope',
-          desc: 'Click @ to pick one or more knowledge bases or files. Answers use only the selection; otherwise the current agent settings apply.',
+          desc: 'Click {\'@\'} to pick one or more knowledge bases or files. Answers use only the selection; otherwise the current agent settings apply.',
         },
         input: {
           title: 'Type your question',
@@ -1907,7 +1907,7 @@ export default {
     title: 'Complete registration',
     subtitle: "You've been invited to join “{tenant}”",
     email: 'Email',
-    emailPlaceholder: 'your@example.com',
+    emailPlaceholder: 'your{\'@\'}example.com',
     emailHint: 'Use any email address you control.',
     emailInvalid: 'Please enter a valid email address',
     username: 'Display name',
@@ -4023,7 +4023,7 @@ export default {
             isActive: 'Account status',
           },
           usernamePlaceholder: '2-100 characters',
-          emailPlaceholder: 'example@domain.com',
+          emailPlaceholder: 'example{\'@\'}domain.com',
           passwordPlaceholder: '8-32 characters, with letters and numbers',
           confirmPasswordPlaceholder: 'Re-enter the password',
           submit: 'Create user',
@@ -4080,7 +4080,7 @@ export default {
             isActive: 'Account status',
           },
           usernamePlaceholder: '2-32 characters',
-          emailPlaceholder: 'example@domain.com',
+          emailPlaceholder: 'example{\'@\'}domain.com',
           noChanges: 'Nothing to save',
           success: 'User account updated',
           failed: 'Update failed',
