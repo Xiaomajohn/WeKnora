@@ -298,7 +298,18 @@
         </div>
 
         <div class="um-detail-section">
-          <h4>{{ t('system.globalSettings.userManagement.detail.membershipsSection') }}</h4>
+          <div class="um-detail-section-header">
+            <h4>{{ t('system.globalSettings.userManagement.detail.membershipsSection') }}</h4>
+            <t-button
+              v-if="detail.id !== currentUserId"
+              size="small"
+              variant="outline"
+              @click="openAddMembership"
+            >
+              <template #icon><t-icon name="add" /></template>
+              {{ t('system.globalSettings.userManagement.detail.addMembership') }}
+            </t-button>
+          </div>
           <div v-if="detail.memberships.length === 0" class="um-detail-empty">
             {{ t('system.globalSettings.userManagement.detail.membershipsEmpty') }}
           </div>
@@ -314,15 +325,76 @@
                 >
                   {{ t('system.globalSettings.userManagement.homeBadge') }}
                 </t-tag>
+                <!--
+                  Per-row role-change select. SystemAdmin can edit any
+                  non-self member's role in any tenant directly from
+                  this drawer; backend enforces the "cannot demote
+                  last active Owner" invariant and returns 409 if a
+                  change would orphan the tenant. Disabled on the
+                  caller's own row (defense in depth — the row action
+                  is also disabled at the table level) and during an
+                  in-flight role change to keep the UI honest.
+                -->
+                <t-select
+                  v-if="detail.id !== currentUserId"
+                  v-model="roleEdits[m.tenant_id]"
+                  size="small"
+                  class="um-membership-role-select"
+                  :loading="roleUpdating[m.tenant_id] === true"
+                  :disabled="roleUpdating[m.tenant_id] === true"
+                  @change="() => changeMembershipRole(m, roleEdits[m.tenant_id])"
+                >
+                  <t-option
+                    v-for="r in availableRoles"
+                    :key="r"
+                    :label="t(`system.globalSettings.userManagement.roleLabels.${r}`)"
+                    :value="r"
+                  />
+                </t-select>
+                <t-tag
+                  v-else
+                  :theme="roleTagTheme(m.role)"
+                  size="small"
+                >
+                  {{ t(`system.globalSettings.userManagement.roleLabels.${m.role}`) }}
+                </t-tag>
               </div>
-              <t-tag
-                :theme="roleTagTheme(m.role)"
-                size="small"
+              <!--
+                Remove-from-tenant popconfirm. Match the
+                deactivate-user popconfirm pattern so the operator
+                sees the destructive verb in the same colour scheme.
+                Disabled for the caller's own row to mirror the
+                self-edit guard — you shouldn't be able to remove
+                yourself from your own home tenant from here (use
+                the per-tenant member page's leave flow instead).
+              -->
+              <t-popconfirm
+                v-if="detail.id !== currentUserId"
+                :content="t('system.globalSettings.userManagement.detail.removeMembershipConfirm', {
+                  name: detail.username || detail.email,
+                  tenant: m.tenant_name,
+                })"
+                :confirm-btn="{ content: t('system.globalSettings.userManagement.detail.removeMembership'), theme: 'danger' }"
+                :cancel-btn="t('common.cancel')"
+                placement="topRight"
+                @confirm="removeMembership(m)"
               >
-                {{ t(`system.globalSettings.userManagement.roleLabels.${m.role}`) }}
-              </t-tag>
+                <t-button
+                  size="small"
+                  variant="text"
+                  theme="danger"
+                  :loading="removing[m.tenant_id] === true"
+                  @click.stop
+                >
+                  <template #icon><t-icon name="logout" /></template>
+                  {{ t('system.globalSettings.userManagement.detail.removeMembership') }}
+                </t-button>
+              </t-popconfirm>
             </li>
           </ul>
+          <p v-if="membershipActionError" class="um-membership-error">
+            {{ membershipActionError }}
+          </p>
         </div>
 
         <div v-if="detail.id !== currentUserId" class="um-detail-actions">
@@ -606,6 +678,93 @@
     </t-dialog>
 
     <!--
+      Add user-to-workspace dialog. Triggered from the "Workspaces &
+      roles" section in the detail drawer. Lists every workspace the
+      user is NOT already an active member of, plus a role picker
+      (Viewer/Admin/Contributor — Owner is intentionally omitted
+      because the create-membership path can't promote a tenantless
+      recipient to Owner; ownership transfer lives behind the
+      separate SpaceManagement edit dialog). Backend: POST
+      /api/v1/tenants/:id/members (OwnerOrSystemAdmin — the
+      SystemAdmin bypass is what makes this surface work without
+      requiring the admin to also be an Owner of every tenant).
+    -->
+    <t-dialog
+      v-model:visible="addMembershipVisible"
+      :header="t('system.globalSettings.userManagement.addMembershipDialog.title', {
+        name: detail?.username || detail?.email || '',
+      })"
+      width="480px"
+      placement="center"
+      dialog-class-name="user-management-add-membership-dialog"
+      :confirm-btn="{
+        content: t('system.globalSettings.userManagement.addMembershipDialog.submit'),
+        theme: 'primary',
+        loading: addMembershipSubmitting,
+      }"
+      :cancel-btn="{
+        content: t('system.globalSettings.userManagement.addMembershipDialog.cancel'),
+        variant: 'outline',
+      }"
+      :close-on-overlay-click="!addMembershipSubmitting"
+      :close-btn="!addMembershipSubmitting"
+      @confirm="submitAddMembership"
+    >
+      <p class="um-edit-description">
+        {{ t('system.globalSettings.userManagement.addMembershipDialog.description', {
+          email: detail?.email || '',
+        }) }}
+      </p>
+      <t-form
+        ref="addMembershipFormRef"
+        :data="addMembershipForm"
+        :rules="addMembershipRules"
+        label-align="top"
+      >
+        <t-form-item
+          :label="t('system.globalSettings.userManagement.addMembershipDialog.fields.tenant')"
+          name="tenantId"
+        >
+          <t-select
+            v-model="addMembershipForm.tenantId"
+            :loading="availableTenantsLoading"
+            :placeholder="t('system.globalSettings.userManagement.addMembershipDialog.tenantPlaceholder')"
+            filterable
+            clearable
+          >
+            <t-option
+              v-for="t in availableTenants"
+              :key="t.id"
+              :label="t.name"
+              :value="t.id"
+            />
+          </t-select>
+        </t-form-item>
+        <t-form-item
+          :label="t('system.globalSettings.userManagement.addMembershipDialog.fields.role')"
+          name="role"
+        >
+          <t-select
+            v-model="addMembershipForm.role"
+            :placeholder="t('system.globalSettings.userManagement.addMembershipDialog.rolePlaceholder')"
+          >
+            <t-option
+              v-for="r in memberAdditionRoles"
+              :key="r"
+              :label="t(`system.globalSettings.userManagement.roleLabels.${r}`)"
+              :value="r"
+            />
+          </t-select>
+        </t-form-item>
+      </t-form>
+      <t-alert
+        v-if="availableTenants.length === 0 && !availableTenantsLoading"
+        theme="info"
+        :message="t('system.globalSettings.userManagement.addMembershipDialog.noAvailableWorkspaces')"
+      />
+    </t-dialog>
+
+    <!--
       Delete user dialog. The confirm step requires the operator to type
       the target user's email exactly — same anti-fat-finger pattern as
       SpaceManagement's DeleteSpaceConfirmDialog. Backend enforces two
@@ -668,6 +827,13 @@ import {
   type AdminUserDetailResponse,
   type UpdateUserRequest,
 } from '@/api/system/users'
+import { listAdminTenants, type SystemTenantInfo } from '@/api/system/spaces'
+import {
+  addMember,
+  updateMemberRole,
+  removeMember,
+  type TenantRole,
+} from '@/api/tenant/members'
 import { useAuthStore } from '@/stores/auth'
 
 const PAGE_SIZE = 50
@@ -751,6 +917,20 @@ function roleTagTheme(role: string): 'primary' | 'success' | 'warning' | 'defaul
       return 'default'
   }
 }
+
+// Roles offered for direct-creation of a new membership via the
+// "Add to workspace" dialog. Owner is intentionally excluded — the
+// AddMember backend path always inserts a non-Owner row (EnsureOwner
+// is what promotes to Owner, and that's a registration-time path
+// the user-management surface deliberately doesn't surface).
+// Ownership transfer for existing tenants lives in the
+// SpaceManagement edit dialog.
+const memberAdditionRoles: TenantRole[] = ['admin', 'contributor', 'viewer']
+
+// Available role choices shown in the per-row role-edit select.
+// Same set as memberAdditionRoles — Owner is reachable only via the
+// dedicated ownership-transfer surface (SpaceManagement edit).
+const availableRoles: TenantRole[] = ['admin', 'contributor', 'viewer']
 
 // ---------------------------------------------------------------------------
 // List lifecycle
@@ -844,6 +1024,12 @@ async function openDetail(row: AdminUserListItem) {
     const res = await getUserDetail(row.id)
     detail.value = res
     detailLoadedId.value = row.id
+    // Seed the per-row role-edit selects from the freshly-fetched
+    // memberships so the select shows the current role without an
+    // extra round-trip when the operator opens one. Reset on every
+    // open so a stale role edit from a prior user doesn't leak into
+    // the new one's drawer.
+    resetMembershipEdits(res)
   } catch (e) {
     const message = (e as { message?: string })?.message
       || t('system.globalSettings.userManagement.messages.detailLoadFailed')
@@ -851,6 +1037,276 @@ async function openDetail(row: AdminUserListItem) {
     detailVisible.value = false
   } finally {
     detailLoading.value = false
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Per-user membership CRUD (centralised user-management surface)
+// ---------------------------------------------------------------------------
+//
+// The membership API at /tenants/:id/members was historically only
+// gated behind Owner role, so SystemAdmins couldn't drive it without
+// also being Owners. The OwnerOrSystemAdmin guard added in the router
+// lifts that restriction; from this drawer we now let a system
+// admin add users to / remove users from / change roles in any
+// tenant they own or merely administer. All three operations use the
+// already-bound TenantMemberService; we just shell out from a
+// centralised UI surface to keep the per-tenant member page from
+// being duplicated in two places.
+//
+// Self-edit guard: actions below early-return when the loaded user
+// is the operator themselves — this mirrors the existing row-action
+// disable so an admin can't quietly demote or evict themselves by
+// accident. The role-change <t-select> and the remove button are
+// already hidden via `v-if` against currentUserId; these guards are
+// defense in depth for the script-level calls.
+
+const membershipActionError = ref('')
+
+// roleEdits mirrors detail.memberships[].role keyed by tenant_id so
+// the per-row <t-select> has a model. seeded in openDetail's success
+// branch via resetMembershipEdits.
+const roleEdits = reactive<Record<number, TenantRole>>({})
+
+// roleUpdating[tenant_id] = true while a PUT is in flight so the
+// select's :loading + :disabled render the spinner and block stale
+// re-fires. Removed when the request settles.
+const roleUpdating = reactive<Record<number, boolean>>({})
+
+// removing[tenant_id] = true while a DELETE is in flight, used by
+// the remove button's :loading flag.
+const removing = reactive<Record<number, boolean>>({})
+
+function resetMembershipEdits(res: AdminUserDetailResponse) {
+  // Wipe any state left over from a previous user so tenant-id
+  // keys don't bleed between two different drawers.
+  Object.keys(roleEdits).forEach((k) => delete roleEdits[Number(k)])
+  Object.keys(roleUpdating).forEach((k) => delete roleUpdating[Number(k)])
+  Object.keys(removing).forEach((k) => delete removing[Number(k)])
+  membershipActionError.value = ''
+  for (const m of res.memberships) {
+    if (m && m.status === 'active') {
+      roleEdits[m.tenant_id] = m.role
+    }
+  }
+}
+
+async function changeMembershipRole(
+  m: AdminUserDetailResponse['memberships'][number],
+  newRole: TenantRole,
+) {
+  if (!detail.value) return
+  if (detail.value.id === currentUserId.value) return
+  if (m.status !== 'active') return
+  if (newRole === m.role) return
+  membershipActionError.value = ''
+  roleUpdating[m.tenant_id] = true
+  try {
+    await updateMemberRole(m.tenant_id, detail.value.id, newRole)
+    // Optimistic UI: patch the cached detail row so the role tag /
+    // select reflect the new value without a full re-fetch. On
+    // success the select's two-way binding already mirrors the new
+    // value; we still update the row so the visual "primary Owner"
+    // tag re-renders if a contributor just became admin.
+    detail.value = {
+      ...detail.value,
+      memberships: detail.value.memberships.map((x) => (x.tenant_id === m.tenant_id
+        ? { ...x, role: newRole }
+        : x)),
+    }
+    // Bump the list-row membership_count too if helpful — actually
+    // role changes don't affect count, so nothing to do there.
+    MessagePlugin.success(t('system.globalSettings.userManagement.detail.membershipRoleChanged'))
+  } catch (e) {
+    // Roll back the optimistic select value so the row returns to
+    // its pre-edit role; the operator can retry without us silently
+    // leaving them on a half-updated state.
+    roleEdits[m.tenant_id] = m.role
+    const message = (e as { message?: string })?.message
+      || t('system.globalSettings.userManagement.detail.membershipActionFailed')
+    membershipActionError.value = message
+    MessagePlugin.error(message)
+  } finally {
+    delete roleUpdating[m.tenant_id]
+  }
+}
+
+async function removeMembership(m: AdminUserDetailResponse['memberships'][number]) {
+  if (!detail.value) return
+  if (detail.value.id === currentUserId.value) return
+  membershipActionError.value = ''
+  removing[m.tenant_id] = true
+  try {
+    await removeMember(m.tenant_id, detail.value.id)
+    detail.value = {
+      ...detail.value,
+      memberships: detail.value.memberships.filter((x) => x.tenant_id !== m.tenant_id),
+    }
+    delete roleEdits[m.tenant_id]
+    // Decrement the list-row membership_count without a full reload
+    // — the membership_count column was loaded eagerly on the list
+    // page and we don't want to round-trip the whole table just for
+    // a single decrement.
+    const rowIdx = users.value.findIndex((u) => u.id === detail.value!.id)
+    if (rowIdx >= 0) {
+      const current = users.value[rowIdx]
+      users.value[rowIdx] = {
+        ...current,
+        membership_count: Math.max(0, current.membership_count - 1),
+      }
+    }
+    MessagePlugin.success(t('system.globalSettings.userManagement.detail.membershipRemoved'))
+  } catch (e) {
+    const message = (e as { message?: string })?.message
+      || t('system.globalSettings.userManagement.detail.membershipActionFailed')
+    membershipActionError.value = message
+    MessagePlugin.error(message)
+  } finally {
+    delete removing[m.tenant_id]
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Add membership dialog
+// ---------------------------------------------------------------------------
+//
+// We list workspaces via the SystemAdmin listAdminTenants helper
+// (the same endpoint SpaceManagement.vue uses) and filter out
+// tenants the user is already a member of so the dropdown only
+// shows eligible targets. Tenant creation is intentionally not
+// part of this surface — admin want to drop a user into an
+// existing tenant, not provision a new one. New workspaces live
+// behind the SpaceManagement create dialog.
+
+const addMembershipVisible = ref(false)
+const addMembershipSubmitting = ref(false)
+const addMembershipFormRef = ref<FormInstanceFunctions>()
+const addMembershipForm = reactive<{
+  tenantId: number | undefined
+  role: TenantRole
+}>({
+  tenantId: undefined,
+  role: 'viewer',
+})
+const allTenants = ref<SystemTenantInfo[]>([])
+const availableTenantsLoading = ref(false)
+
+const addMembershipRules: Record<string, FormRule[]> = {
+  tenantId: [
+    {
+      required: true,
+      message: t('system.globalSettings.userManagement.addMembershipDialog.validation.tenantRequired'),
+      trigger: 'change',
+    },
+  ],
+  role: [
+    {
+      required: true,
+      message: t('system.globalSettings.userManagement.addMembershipDialog.validation.roleRequired'),
+      trigger: 'change',
+    },
+  ],
+}
+
+const availableTenants = computed(() => {
+  if (!detail.value) return [] as SystemTenantInfo[]
+  const taken = new Set(detail.value.memberships.map((m) => m.tenant_id))
+  return allTenants.value.filter((tn) => !taken.has(tn.id))
+})
+
+async function loadAllTenants() {
+  availableTenantsLoading.value = true
+  try {
+    // Single-page window with a generous limit; tenant count rarely
+    // exceeds this and admin users benefit from seeing the full
+    // set rather than paging through tenants to find the target.
+    const res = await listAdminTenants({ page: 1, page_size: 200 })
+    allTenants.value = res.items
+  } catch {
+    // Best-effort; fall back to empty list, the dialog surfaces
+    // the "no available workspaces" alert when nothing was loaded.
+    allTenants.value = []
+  } finally {
+    availableTenantsLoading.value = false
+  }
+}
+
+function openAddMembership() {
+  if (!detail.value) return
+  if (detail.value.id === currentUserId.value) return
+  addMembershipForm.tenantId = undefined
+  addMembershipForm.role = 'viewer'
+  addMembershipVisible.value = true
+  // Always refresh on open — workspaces can be created / deleted
+  // since the last open, and a stale candidate set would silently
+  // hide a valid option.
+  void loadAllTenants()
+}
+
+async function submitAddMembership() {
+  const validate = addMembershipFormRef.value?.validate
+  if (typeof validate === 'function') {
+    try {
+      await validate()
+    } catch {
+      return
+    }
+  }
+  if (!detail.value) return
+  if (addMembershipForm.tenantId === undefined || addMembershipForm.tenantId === null) return
+  addMembershipSubmitting.value = true
+  try {
+    // Use the user's email to identify the target, matching the
+    // AddMember backend contract (POST /tenants/:id/members takes
+    // {email, role}). The router-level OwnerOrSystemAdmin guard
+    // lets us call this from any tenant without first joining.
+    const targetTenantId = addMembershipForm.tenantId
+    const resp = await addMember(targetTenantId, {
+      email: detail.value.email,
+      role: addMembershipForm.role,
+    })
+    // Optimistically inject the new membership into the drawer so
+    // the row appears immediately. If the response carries the
+    // canonical row, use it; otherwise synthesise from what we know.
+    if (resp.success && resp.data) {
+      const d = resp.data
+      const newRow = {
+        tenant_id: targetTenantId,
+        tenant_name: allTenants.value.find((x) => x.id === targetTenantId)?.name ?? '',
+        role: d.role,
+        status: d.status,
+        joined_at: d.joined_at,
+        is_home_tenant: false,
+      }
+      detail.value = {
+        ...detail.value,
+        memberships: detail.value.memberships.concat(newRow),
+      }
+      roleEdits[targetTenantId] = d.role
+    } else {
+      // Fallback: re-fetch the detail so the list-of-spaces is
+      // guaranteed to reflect the backend truth.
+      const refreshed = await getUserDetail(detail.value.id)
+      detail.value = refreshed
+      resetMembershipEdits(refreshed)
+    }
+    // Bump the list-row counter.
+    const rowIdx = users.value.findIndex((u) => u.id === detail.value!.id)
+    if (rowIdx >= 0) {
+      const current = users.value[rowIdx]
+      users.value[rowIdx] = {
+        ...current,
+        membership_count: current.membership_count + 1,
+      }
+    }
+    MessagePlugin.success(t('system.globalSettings.userManagement.addMembershipDialog.success'))
+    addMembershipVisible.value = false
+  } catch (e) {
+    const message = (e as { message?: string })?.message
+      || t('system.globalSettings.userManagement.addMembershipDialog.failed')
+    MessagePlugin.error(message)
+  } finally {
+    addMembershipSubmitting.value = false
   }
 }
 
@@ -1324,6 +1780,32 @@ async function submitDelete() {
   padding: 8px 0;
 }
 
+.um-detail-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.um-detail-section-header h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--td-text-color-primary, #333);
+}
+
+.um-membership-role-select {
+  min-width: 130px;
+}
+
+.um-membership-error {
+  color: var(--td-error-color, #d54941);
+  font-size: 13px;
+  margin: 8px 0 0;
+  line-height: 1.5;
+}
+
 .um-membership-list {
   list-style: none;
   padding: 0;
@@ -1337,6 +1819,7 @@ async function submitDelete() {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
   padding: 8px 12px;
   border: 1px solid var(--td-component-stroke, #e7e7e7);
   border-radius: 4px;
@@ -1348,6 +1831,7 @@ async function submitDelete() {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .um-membership-name {

@@ -3059,7 +3059,7 @@ export default {
         },
         detail: {
           title: "用户详情",
-          description: "查看用户账户信息与所属空间，可在右侧修改用户名、邮箱或调整账号状态。",
+          description: "查看用户账户信息与所属空间。点击右侧操作可在任意空间里调整该用户的角色、将其移出该空间，或将该用户加入一个新的空间。",
           accountSection: "账户信息",
           membershipsSection: "所属空间与角色",
           membershipsEmpty: "该用户暂未加入任何空间。",
@@ -3074,6 +3074,12 @@ export default {
           },
           isActiveOn: "正常",
           isActiveOff: "已停用",
+          addMembership: "加入空间",
+          removeMembership: "移出空间",
+          removeMembershipConfirm: "将 {name} 移出空间「{tenant}」？该用户在该空间的所有访问将立即失效。",
+          membershipRoleChanged: "角色已更新",
+          membershipRemoved: "已将用户移出该空间",
+          membershipActionFailed: "操作失败，请稍后重试",
         },
         editDialog: {
           title: "编辑用户",
@@ -3132,6 +3138,25 @@ export default {
           admin: "管理员",
           contributor: "成员",
           viewer: "访客",
+        },
+        addMembershipDialog: {
+          title: "将 {name} 加入空间",
+          description: "从下方选择目标空间以及初始角色。Owner 角色请改用「编辑空间」中的「所有者」字段转移。新增后写入审计日志。",
+          fields: {
+            tenant: "目标空间",
+            role: "角色",
+          },
+          tenantPlaceholder: "选择目标空间（仅显示未加入的空间）",
+          rolePlaceholder: "选择初始角色",
+          submit: "加入空间",
+          cancel: "取消",
+          success: "已成功加入空间",
+          failed: "加入空间失败",
+          noAvailableWorkspaces: "该用户已是所有空间成员，无需重复加入。如需调整其在某空间中的角色，请使用右侧列表中的角色下拉框。",
+          validation: {
+            tenantRequired: "请选择目标空间",
+            roleRequired: "请选择初始角色",
+          },
         },
         statusLabels: {
           active: "正常",
@@ -3210,11 +3235,18 @@ export default {
         },
         editDialog: {
           title: "编辑空间 {name}",
+          description: "可修改名称、描述、状态与存储配额，并可将所有权一次性转移给另一个成员。",
           fields: {
             name: "空间名称",
             description: "描述",
             storageQuota: "存储配额（GB）",
             status: "状态",
+            owner: "所有者",
+          },
+          ownerSelector: {
+            placeholder: "留空表示不修改所有者",
+            currentHint: "当前所有者：{owner}。选择一个用户后，该用户将被提升为新所有者，原所有者自动降级为管理员。",
+            loadingError: "加载用户列表失败，请刷新页面重试。",
           },
           submit: "保存修改",
           cancel: "取消",
@@ -6843,6 +6875,11 @@ export default {
   userProfile: {
     title: "用户信息",
     description: "查看您的账户基础信息（用户 ID、用户名、邮箱、注册时间）",
+    adminManagement: {
+      title: "您是系统管理员",
+      description: "本页只展示您自己的账户信息。若要查看全部用户、编辑账号、关联空间或管理用户权限，请进入平台统一的用户管理页面。",
+      cta: "进入用户管理",
+    },
   },
   tenantMember: {
     title: "成员管理",

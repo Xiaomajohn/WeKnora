@@ -6510,6 +6510,11 @@ export default {
   userProfile: {
     title: "사용자 정보",
     description: "계정 기본 정보(사용자 ID, 사용자 이름, 이메일, 가입 시각)를 확인합니다.",
+    adminManagement: {
+      title: "시스템 관리자 계정입니다",
+      description: "이 페이지는 본인의 계정 정보만 보여 줍니다. 전체 사용자 조회, 계정 수정, 워크스페이스 연동, 권한 관리를 하려면 플랫폼 통합 사용자 관리 화면으로 이동하세요.",
+      cta: "사용자 관리 열기",
+    },
   },
   tenantMember: {
     title: "멤버 관리",

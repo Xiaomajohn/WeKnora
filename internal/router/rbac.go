@@ -208,6 +208,17 @@ func (g *rbacGuards) AdminOrSystemAdmin() gin.HandlerFunc {
 	return middleware.RequireRoleOrSystemAdmin(types.TenantRoleAdmin, g.cfg)
 }
 
+// OwnerOrSystemAdmin applies the Owner role floor while also allowing platform
+// system administrators. Use it for tenant-member mutation routes
+// (POST/PUT/DELETE /tenants/:id/members*) so that a system administrator can
+// manage cross-tenant memberships without first joining the tenant as Owner.
+// Normal users still need Owner role in the target tenant; the SystemAdmin
+// bypass is what makes the platform-wide user-management surface
+// (system → users → detail → "edit role in tenant") work end-to-end.
+func (g *rbacGuards) OwnerOrSystemAdmin() gin.HandlerFunc {
+	return middleware.RequireRoleOrSystemAdmin(types.TenantRoleOwner, g.cfg)
+}
+
 func (g *rbacGuards) Owner() gin.HandlerFunc {
 	return middleware.RequireRole(types.TenantRoleOwner, g.cfg)
 }

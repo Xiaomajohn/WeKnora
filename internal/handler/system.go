@@ -2738,11 +2738,28 @@ type AdminTenantListResponse struct {
 // and storage_quota too (Owner-facing PUT /tenants/:id deliberately
 // hides both fields). All fields are pointers so empty PATCHes are
 // idempotent no-ops.
+//
+// owner_user_id, when present, performs an ownership transfer:
+//  1. the requested user must already exist (404 otherwise);
+//  2. they must already be an active member of the workspace — we
+//     don't silently widen membership as a side-effect of a transfer
+//     (callers should add them through POST /tenants/:id/members first);
+//  3. the new owner is promoted via EnsureOwner (idempotent: no-op
+//     if they already hold any role), THEN the previous owner is
+//     demoted to admin via UpdateRole. This ordering — promote-then-
+//     demote — keeps the tenant never without an active Owner, so
+//     the "cannot demote the last Owner" invariant cannot fire;
+//  4. the transfer is recorded as `system.tenant_owner_transferred`
+//     in the audit log with from/to user ids and the acting admin.
 type updateTenantAdminRequest struct {
 	Name           *string `json:"name,omitempty"            binding:"omitempty,min=1,max=128"`
 	Description    *string `json:"description,omitempty"     binding:"omitempty,max=512"`
 	Status         *string `json:"status,omitempty"          binding:"omitempty,oneof=active suspended"`
 	StorageQuotaGB *int64  `json:"storage_quota_gb,omitempty" binding:"omitempty,min=1"`
+	// OwnerUserID promotes an existing member to Owner and demotes
+	// the previous Owner to Admin (no-op when the value matches the
+	// current Owner). Empty string is treated as "not provided".
+	OwnerUserID *string `json:"owner_user_id,omitempty"`
 }
 
 // loadTenantOwnerUsername is the helper that powers both
@@ -2897,11 +2914,15 @@ func (h *SystemHandler) GetTenantDetailAdmin(c *gin.Context) {
 
 // UpdateTenantAdmin godoc
 // @Summary      Update a workspace (SystemAdmin only)
-// @Description  PATCH-style update of name, description, status and/or
-// @Description  storage_quota (in GiB). All fields are pointers so an
-// @Description  empty body is a no-op. The Owner-facing PUT /tenants/:id
-// @Description  intentionally hides status and storage_quota; this
-// @Description  endpoint is the SystemAdmin's separate edit surface.
+// @Description  PATCH-style update of name, description, status,
+// @Description  storage_quota (in GiB), and/or owner_user_id.
+// @Description  All fields are pointers so an empty body is a no-op.
+// @Description  The Owner-facing PUT /tenants/:id intentionally hides
+// @Description  status and storage_quota; this endpoint is the
+// @Description  SystemAdmin's separate edit surface. owner_user_id
+// @Description  performs an ownership transfer (target user must
+// @Description  already be an active member); see type doc for the
+// @Description  full promote-then-demote invariant.
 // @Description  Every applied field is recorded in the audit log with
 // @Description  its before/after value.
 // @Tags         System Admin
@@ -2933,11 +2954,38 @@ func (h *SystemHandler) UpdateTenantAdmin(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
 		return
 	}
-	if req.Name == nil && req.Description == nil && req.Status == nil && req.StorageQuotaGB == nil {
+	if req.Name == nil && req.Description == nil && req.Status == nil && req.StorageQuotaGB == nil && req.OwnerUserID == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No fields to update"})
 		return
 	}
+	// Ownership transfer branch. Runs BEFORE the tenant-mutation branch
+	// so a PATCH that includes ONLY owner_user_id still gets audit +
+	// 200 + refreshed tenant back. We cap at one transfer per request;
+	// the request schema is single-owner_user_id by design — there is
+	// no multi-owner transfer.
 	changes := map[string]map[string]any{}
+	var ownerTransfer *ownerTransferResult
+	if req.OwnerUserID != nil {
+		target := strings.TrimSpace(*req.OwnerUserID)
+		if target == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "owner_user_id cannot be empty"})
+			return
+		}
+		var err error
+		ownerTransfer, err = h.transferTenantOwnership(ctx, tenant, target)
+		if err != nil {
+			logger.Warnf(ctx, "UpdateTenantAdmin owner transfer failed for tenant %d -> %s: %v",
+				tenant.ID, target, err)
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if ownerTransfer != nil {
+			changes["owner_user_id"] = map[string]any{
+				"from": ownerTransfer.PreviousOwnerUserID,
+				"to":   ownerTransfer.NewOwnerUserID,
+			}
+		}
+	}
 	if req.Name != nil {
 		newName := strings.TrimSpace(*req.Name)
 		if newName == "" {
@@ -3006,8 +3054,165 @@ func (h *SystemHandler) UpdateTenantAdmin(c *gin.Context) {
 			Outcome:     types.AuditOutcomeSuccess,
 			Details:     types.JSON(details),
 		})
+		// Emit a dedicated owner-transfer audit row when the PATCH
+		// actually moved ownership. Distinct from
+		// AuditActionSystemTenantUpdated so operators can filter the
+		// workspace-level event ("admin moved ownership of workspace
+		// X") without trawling every workspace-edit row. We attach
+		// the previous/new owner ids + whether the previous owner
+		// was demoted (rather than removed) so a forensic reviewer
+		// can reconstruct the full state transition. The
+		// AuditActionSystemTenantUpdated row above already records
+		// the same `changes` map, so this row is supplementary.
+		if ownerTransfer != nil {
+			transferDetails, _ := json.Marshal(map[string]any{
+				"target_tenant_id":       updated.ID,
+				"target_tenant_name":     updated.Name,
+				"previous_owner_user_id": ownerTransfer.PreviousOwnerUserID,
+				"new_owner_user_id":      ownerTransfer.NewOwnerUserID,
+				"changed":                true,
+			})
+			_ = h.auditSvc.Log(ctx, &types.AuditLog{
+				TenantID:    0,
+				ActorUserID: actorID,
+				ActorRole:   "system_admin",
+				Action:      types.AuditActionSystemTenantOwnerTransferred,
+				TargetType:  "tenant",
+				TargetID:    strconv.FormatUint(updated.ID, 10),
+				Outcome:     types.AuditOutcomeSuccess,
+				Details:     types.JSON(transferDetails),
+			})
+		}
 	}
 	c.JSON(http.StatusOK, updated)
+}
+
+// ownerTransferResult captures the before/after IDs from a successful
+// ownership transfer. nil when transferTenantOwnership returned early
+// because the target user was already the current Owner (no-op).
+type ownerTransferResult struct {
+	PreviousOwnerUserID string
+	NewOwnerUserID      string
+}
+
+// transferTenantOwnership promotes targetUserID to Owner of the given
+// tenant and demotes the current Owner to admin. Used by
+// UpdateTenantAdmin when the PATCH carries an owner_user_id field.
+//
+// Invariants enforced here:
+//   - targetUserID refers to an existing user (404-mapped by the
+//     handler for any other failure mode);
+//   - targetUserID is already an active member of the tenant — we do
+//     NOT silently widen membership as a side-effect of an ownership
+//     transfer. Callers should add the user to the tenant first
+//     (POST /tenants/:id/members), then set them as Owner;
+//   - targetUserID is not already the active Owner — idempotent
+//     no-op when the request is "transfer ownership to whoever
+//     already owns it";
+//   - the previous Owner is demoted to admin (NOT removed) so they
+//     retain audit access. The "demote Owner" path is only executed
+//     when we already promoted the new owner, so the
+//     "cannot-demote-last-Owner" invariant in
+//     service.UpdateRole → repo.DemoteOwnerAtomically cannot fire
+//     (by construction the tenant owns at least 2 active Owners at
+//     that point).
+//
+// Returns (nil, nil) when the transfer was a no-op (target == current),
+// so the handler can skip the audit row + changes entry — matching
+// the "no-op success" policy used for empty PATCHes.
+func (h *SystemHandler) transferTenantOwnership(
+	ctx context.Context,
+	tenant *types.Tenant,
+	targetUserID string,
+) (*ownerTransferResult, error) {
+	if h.userSvc == nil || h.tenantMemberService == nil {
+		return nil, fmt.Errorf("ownership transfer is unavailable in this deployment")
+	}
+	target, err := h.userSvc.GetUserByID(ctx, targetUserID)
+	if err != nil || target == nil {
+		if errors.Is(err, repository.ErrUserNotFound) {
+			return nil, fmt.Errorf("owner_user_id refers to non-existent user")
+		}
+		return nil, fmt.Errorf("failed to resolve owner target: %v", err)
+	}
+	// Membership check: refuse to promote someone who isn't an active
+	// member of the tenant — silently granting membership by promoting
+	// a stranger would hide the access widening from the audit table.
+	membership, err := h.tenantMemberService.GetMembership(ctx, target.ID, tenant.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read target membership: %v", err)
+	}
+	if membership == nil || membership.Status != types.TenantMemberStatusActive {
+		return nil, fmt.Errorf("owner_user_id must already be an active member of this workspace")
+	}
+
+	// Locate the current Owner. In practice each workspace has exactly
+	// one active Owner (the bootstrap path doesn't create extras), so
+	// we read just the first active Owner row. If somehow there are
+	// multiple, we treat the first as "the previous owner" — the
+	// promote-then-demote ordering still leaves the tenant with at
+	// least the new owner at the end, so the invariant holds.
+	members, err := h.tenantMemberService.ListByTenant(ctx, tenant.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tenant members: %v", err)
+	}
+	var currentOwnerID string
+	for _, m := range members {
+		if m != nil && m.Role == types.TenantRoleOwner && m.Status == types.TenantMemberStatusActive {
+			currentOwnerID = m.UserID
+			break
+		}
+	}
+	if currentOwnerID == target.ID {
+		// Already the Owner — idempotent no-op. No audit row, no
+		// changes entry, but a 200 success so the UI's "save" path
+		// completes cleanly. We log at Info so an audit reader can
+		// still see admin-driven no-op touches.
+		logger.Infof(ctx,
+			"UpdateTenantAdmin owner transfer no-op: tenant=%d target=%s already Owner",
+			tenant.ID, target.ID)
+		return nil, nil
+	}
+
+	// Promote target to Owner FIRST. EnsureOwner is idempotent — if
+	// the user already holds another role in this tenant the row is
+	// updated in-place; otherwise a new Owner row is inserted. Either
+	// way we end up with at least two active Owners (the previous one
+	// + the new one), so the subsequent demotion can never violate
+	// the "last-Owner" invariant.
+	if _, err := h.tenantMemberService.EnsureOwner(ctx, target.ID, tenant.ID); err != nil {
+		return nil, fmt.Errorf("failed to promote new owner: %v", err)
+	}
+
+	// Demote the previous Owner to admin. If there was no previous
+	// Owner (orphan tenant — the service should never produce one,
+	// but we keep this defensive branch so a buggy bootstrap doesn't
+	// wedge here), there is nothing to demote.
+	demoted := false
+	if currentOwnerID != "" {
+		if err := h.tenantMemberService.UpdateRole(ctx, currentOwnerID, tenant.ID, types.TenantRoleAdmin); err != nil {
+			// Best-effort rollback: undo the promotion so the tenant
+			// returns to its original Owner, not to a duplicate-Owner
+			// state that confuses downstream admin paths.
+			if rbErr := h.tenantMemberService.UpdateRole(ctx, target.ID, tenant.ID, types.TenantRoleAdmin); rbErr != nil {
+				logger.Errorf(ctx,
+					"transferTenantOwnership rollback failed for tenant=%d new-owner=%s: origErr=%v rbErr=%v",
+					tenant.ID, target.ID, err, rbErr)
+			}
+			if errors.Is(err, service.ErrLastOwner) {
+				return nil, fmt.Errorf("ownership transfer would leave the workspace without an active Owner")
+			}
+			return nil, fmt.Errorf("failed to demote previous owner: %v", err)
+		}
+		demoted = true
+	}
+	logger.Infof(ctx,
+		"transferTenantOwnership: tenant=%d ownership moved from %q -> %q (demoted_previous=%t)",
+		tenant.ID, currentOwnerID, target.ID, demoted)
+	return &ownerTransferResult{
+		PreviousOwnerUserID: currentOwnerID,
+		NewOwnerUserID:      target.ID,
+	}, nil
 }
 
 // DeleteTenantAdmin godoc

@@ -677,6 +677,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { MessagePlugin } from 'tdesign-vue-next'
 import type { FormInstanceFunctions, FormRule } from 'tdesign-vue-next'
@@ -844,7 +845,24 @@ const SETTINGS_SECTION_KEYS: Record<Exclude<SettingsSection, 'other'>, readonly 
   spaces: [],
 }
 
-const activeSettingsSection = ref<SettingsSection>('access')
+// Default tab. Falls back to 'access' unless the URL carries ?section=system-global
+// together with a ?tab= query parameter, in which case a deep-link like
+// /platform/settings?section=system-global&tab=users lands the operator
+// directly on the UserManagement surface (SystemManagement UX asked for a
+// direct bookmark; the 'users' / 'spaces' tabs are not settable via the
+// Tabs v-model seed so we have to read the query here).
+const route = useRoute()
+const validSections: ReadonlySet<SettingsSection> = new Set([
+  'access', 'tenant', 'runtime', 'security', 'users', 'spaces', 'other',
+])
+const initialTab = ((): SettingsSection => {
+  const raw = (route.query.tab as string | undefined)?.toLowerCase()
+  if (raw && (validSections as Set<string>).has(raw)) {
+    return raw as SettingsSection
+  }
+  return 'access'
+})()
+const activeSettingsSection = ref<SettingsSection>(initialTab)
 const knownSettingKeys = new Set(Object.values(SETTINGS_SECTION_KEYS).flat())
 const settingsByKey = computed(() => new Map(settings.value.map((item) => [item.key, item])))
 const unknownSettings = computed(() => settings.value.filter((item) => !knownSettingKeys.has(item.key)))

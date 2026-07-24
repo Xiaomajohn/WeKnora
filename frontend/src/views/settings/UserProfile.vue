@@ -5,6 +5,35 @@
       <p class="section-description">{{ $t('userProfile.description') }}</p>
     </div>
 
+    <!--
+      SystemAdmin-only entry point to the platform-wide user-management
+      surface. The default UserProfile view only exposes the *current
+      user's* read-only fields; when the operator is a platform admin
+      we surface a CTA that opens the UserManagement page (located
+      under System Settings → Users tab) with one click. Without this
+      shortcut admins had to leave the modal, navigate to system
+      administration, and click the "Users" tab — three separate steps
+      for the most common "manage all users" task.
+    -->
+    <div v-if="isSystemAdmin" class="user-profile-admin-cta">
+      <t-alert
+        theme="info"
+        :message="$t('userProfile.adminManagement.title')"
+        :description="$t('userProfile.adminManagement.description')"
+      >
+        <template #operation>
+          <t-button
+            theme="primary"
+            size="small"
+            @click="openUserManagement"
+          >
+            <template #icon><t-icon name="usergroup" /></template>
+            {{ $t('userProfile.adminManagement.cta') }}
+          </t-button>
+        </template>
+      </t-alert>
+    </div>
+
     <!-- Loading -->
     <div v-if="loading" class="loading-inline">
       <t-loading size="small" />
@@ -70,11 +99,32 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { getCurrentUser, type UserInfo } from '@/api/auth'
+import { useAuthStore } from '@/stores/auth'
 import { useI18n } from 'vue-i18n'
 
 const { t, locale } = useI18n()
+const authStore = useAuthStore()
+const router = useRouter()
+
+// Reflect the platform-wide admin flag so the CTA only shows for users
+// who can actually reach the UserManagement page. Auth store already
+// rehydrates this on page load (see router/index.ts → hydrateSession…),
+// so reading here is safe on first render.
+const isSystemAdmin = computed(() => authStore.isSystemAdmin)
+
+// openUserManagement jumps straight to the SystemSettings page with the
+// Users tab pre-selected. This is the same surface operators reach via
+// Settings → System Administration → Users tab, but the deep-link
+// avoids the three-click navigation that previously hid it.
+function openUserManagement() {
+  router.push({
+    path: '/platform/settings',
+    query: { section: 'system-global', tab: 'users' },
+  })
+}
 
 const userInfo = ref<UserInfo | null>(null)
 const loading = ref(true)
@@ -120,6 +170,13 @@ onMounted(loadInfo)
 <style lang="less" scoped>
 .user-profile {
   width: 100%;
+}
+
+// SystemAdmin-only CTA banner. Pushed below the page header so the
+// copy "账户基本信息" still reads first; the banner then points at
+// the platform-wide admin surface for users who can use it.
+.user-profile-admin-cta {
+  margin-bottom: 24px;
 }
 
 .section-header {

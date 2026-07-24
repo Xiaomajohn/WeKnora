@@ -92,13 +92,26 @@ export interface CreateAdminTenantRequest {
  * api/tenant/index.ts: this surface exposes status and
  * storage_quota_gb, which the Owner-facing surface deliberately
  * hides (so an Owner can't self-suspend their workspace or balloon
- * their own quota).
+ * their own quota). It also exposes `owner_user_id`, which performs
+ * an ownership transfer on top of the regular field updates; the
+ * target user must already be an active member of the workspace
+ * (otherwise the server returns 400 with a "must already be an
+ * active member" message — add them through POST /tenants/:id/members
+ * first).
  */
 export interface UpdateAdminTenantRequest {
   name?: string
   description?: string
   status?: 'active' | 'suspended'
   storage_quota_gb?: number
+  /**
+   * UUID of the new Owner. Empty string / undefined means "do not
+   * touch ownership". When set, the value must match an active
+   * member of the workspace; the previous Owner is demoted to admin
+   * (not removed). No-op when the value already matches the current
+   * Owner — same idempotent policy the other fields follow.
+   */
+  owner_user_id?: string
 }
 
 /**

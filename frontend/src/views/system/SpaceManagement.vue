@@ -423,6 +423,46 @@
             />
           </t-select>
         </t-form-item>
+        <!--
+          Ownership-transfer selector. Empty = keep the current Owner
+          untouched. Picking a user promotes them to Owner and demotes
+          the previous Owner to admin (server-side, via the
+          transferTenantOwnership helper). The current Owner is shown
+          as a hint under the dropdown so the admin can confirm who
+          they're about to displace. We don't preload a "self" option
+          here because the create-dialog semantics (admin-self default)
+          don't apply — editing an existing workspace always targets an
+          existing owner set, and "admin becomes the owner" would
+          silently demote the legitimate owner without consent.
+        -->
+        <t-form-item
+          :label="t('system.globalSettings.spaceManagement.editDialog.fields.owner')"
+          name="ownerUserId"
+        >
+          <t-select
+            v-model="editForm.ownerUserId"
+            :disabled="editSubmitting"
+            :loading="ownerCandidatesLoading"
+            :placeholder="t('system.globalSettings.spaceManagement.editDialog.ownerSelector.placeholder')"
+            clearable
+            filterable
+          >
+            <t-option
+              v-for="u in ownerCandidates"
+              :key="u.id"
+              :label="`${u.username} · ${u.email}`"
+              :value="u.id"
+            />
+          </t-select>
+          <p class="sm-edit-hint">
+            {{ t('system.globalSettings.spaceManagement.editDialog.ownerSelector.currentHint', {
+              owner: editTarget?.owner_username || t('system.globalSettings.spaceManagement.detail.ownerEmptyHint'),
+            }) }}
+          </p>
+          <p v-if="ownerCandidatesError" class="sm-create-hint">
+            {{ t('system.globalSettings.spaceManagement.createDialog.ownerSelector.loadingError') }}
+          </p>
+        </t-form-item>
       </t-form>
     </t-dialog>
 
@@ -763,12 +803,24 @@ const editSnapshot = ref<{
   description: string
   storageQuotaGb: number | undefined
   status: string
+  // Snapshot the owner selection so an unchanged value doesn't fire
+  // a PATCH. Sentinel is the literal "" string — the form initialises
+  // editForm.ownerUserId to "" too, so an untouched dropdown matches.
+  ownerUserId: string
 } | null>(null)
 const editForm = reactive({
   name: '',
   description: '',
   storageQuotaGb: undefined as number | undefined,
   status: 'active' as 'active' | 'suspended',
+  // Empty string = "do not transfer ownership". The select renders
+  // an empty selection with placeholder text inviting the admin to
+  // pick a new Owner. We deliberately do NOT default to the current
+  // owner's user id because the /system/admin/tenants/:id payload
+  // does not surface it — only owner_username. Capturing "no change"
+  // as "" keeps the PATCH compact and matches the other fields'
+  // idempotent semantics (empty value = no write).
+  ownerUserId: '' as string,
 })
 
 const editRules: Record<string, FormRule[]> = {
@@ -791,12 +843,19 @@ function openEdit(row: SystemTenantInfo) {
     description: row.description || '',
     storageQuotaGb: storageQuotaBytesToGb(row.storage_quota),
     status: row.status || 'active',
+    ownerUserId: '',
   }
   editForm.name = row.name
   editForm.description = row.description || ''
   editForm.storageQuotaGb = storageQuotaBytesToGb(row.storage_quota)
   editForm.status = (row.status === 'suspended' ? 'suspended' : 'active')
+  editForm.ownerUserId = ''
   editVisible.value = true
+  // Reuse the create dialog's candidate list. loadOwnerCandidates is
+  // idempotent and caches its result across calls, so the second open
+  // is a no-op fetch — but we still call it so an admin who only
+  // edits (never creates) gets the candidate list populated.
+  void loadOwnerCandidates()
 }
 
 function buildEditPayload(): UpdateAdminTenantRequest | null {
@@ -815,6 +874,15 @@ function buildEditPayload(): UpdateAdminTenantRequest | null {
   if ((editForm.storageQuotaGb ?? null) !== (snap.storageQuotaGb ?? null)) {
     if (editForm.storageQuotaGb && editForm.storageQuotaGb > 0) {
       payload.storage_quota_gb = editForm.storageQuotaGb
+    }
+  }
+  // Owner transfer: empty/whitespace = "do not touch ownership",
+  // matching the create-dialog semantics. We diff against the
+  // snapshot's ownerUserId sentinel ("") so unchanged = no-op.
+  const trimmedOwner = editForm.ownerUserId.trim()
+  if (trimmedOwner !== snap.ownerUserId) {
+    if (trimmedOwner) {
+      payload.owner_user_id = trimmedOwner
     }
   }
   return Object.keys(payload).length > 0 ? payload : null
@@ -1034,6 +1102,13 @@ onBeforeUnmount(() => {
   color: var(--td-error-color, #d54941);
   font-size: 12px;
   margin: 4px 0 0;
+}
+
+.sm-edit-hint {
+  color: var(--td-text-color-secondary, #666);
+  font-size: 12px;
+  margin: 4px 0 0;
+  line-height: 1.5;
 }
 
 .sm-delete-warning {

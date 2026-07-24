@@ -4054,7 +4054,7 @@ export default {
         },
         detail: {
           title: 'User details',
-          description: 'Inspect account information and the workspaces the user belongs to. Edit username, email, or account status from the right panel.',
+          description: 'Inspect account information and the workspaces the user belongs to. Use the inline controls to change a role, remove from a workspace, or add the user to a new one.',
           accountSection: 'Account information',
           membershipsSection: 'Workspaces & roles',
           membershipsEmpty: 'This user has not joined any workspace yet.',
@@ -4069,6 +4069,12 @@ export default {
           },
           isActiveOn: 'Active',
           isActiveOff: 'Disabled',
+          addMembership: 'Add to workspace',
+          removeMembership: 'Remove',
+          removeMembershipConfirm: 'Remove {name} from workspace “{tenant}”? The user will lose access immediately.',
+          membershipRoleChanged: 'Role updated',
+          membershipRemoved: 'User removed from workspace',
+          membershipActionFailed: 'Operation failed, please try again',
         },
         editDialog: {
           title: 'Edit user',
@@ -4127,6 +4133,25 @@ export default {
           admin: 'Admin',
           contributor: 'Member',
           viewer: 'Viewer',
+        },
+        addMembershipDialog: {
+          title: 'Add {name} to a workspace',
+          description: 'Pick a target workspace and an initial role. To grant the Owner role, transfer ownership from the workspace edit dialog instead. The change is recorded in the audit log.',
+          fields: {
+            tenant: 'Target workspace',
+            role: 'Role',
+          },
+          tenantPlaceholder: 'Pick a workspace (only workspaces the user has not joined are shown)',
+          rolePlaceholder: 'Pick an initial role',
+          submit: 'Add to workspace',
+          cancel: 'Cancel',
+          success: 'User added to workspace',
+          failed: 'Failed to add user to workspace',
+          noAvailableWorkspaces: 'This user is already a member of every workspace. To change an existing role, use the role dropdown in the workspace list above.',
+          validation: {
+            tenantRequired: 'Please pick a target workspace',
+            roleRequired: 'Please pick an initial role',
+          },
         },
         statusLabels: {
           active: 'Active',
@@ -4205,11 +4230,18 @@ export default {
         },
         editDialog: {
           title: 'Edit workspace {name}',
+          description: 'Update name, description, status, or storage quota, and optionally transfer ownership to another member in the same step.',
           fields: {
             name: 'Workspace name',
             description: 'Description',
             storageQuota: 'Storage quota (GB)',
             status: 'Status',
+            owner: 'Owner',
+          },
+          ownerSelector: {
+            placeholder: 'Leave blank to keep the current owner',
+            currentHint: 'Current owner: {owner}. Selecting a user promotes them to Owner and demotes the previous Owner to Admin.',
+            loadingError: 'Failed to load the user list — please refresh the page.',
           },
           submit: 'Save changes',
           cancel: 'Cancel',
@@ -6821,6 +6853,11 @@ export default {
   userProfile: {
     title: 'User Profile',
     description: 'View your account info (user ID, username, email, registration time).',
+    adminManagement: {
+      title: 'You are a system administrator',
+      description: 'This page only shows your own account. To view all users, edit accounts, associate users with workspaces, or manage workspace permissions, open the platform-wide user-management surface.',
+      cta: 'Open user management',
+    },
   },
   tenantMember: {
     title: 'Members',

@@ -173,6 +173,17 @@ const (
 	// so an audit reader can diff the workspace's state without snapshot
 	// diffs. TenantID=0 because the change is system-scope.
 	AuditActionSystemTenantUpdated AuditAction = "system.tenant_updated"
+	// AuditActionSystemTenantOwnerTransferred fires when a SystemAdmin
+	// transfers a workspace's ownership to a different member via
+	// PATCH /system/admin/tenants/:id (owner_user_id field). Distinct
+	// from AuditActionMemberRoleChanged because the same physical row
+	// change here carries workspace-level semantics (no other Owner-
+	// eligible gate) — operators want to be able to filter "an admin
+	// moved ownership of workspace X" without trawling every member
+	// role change. Details payload carries {target_tenant_id,
+	// target_tenant_name, previous_owner_user_id, new_owner_user_id,
+	// changed: bool}. TenantID=0 because the change is system-scope.
+	AuditActionSystemTenantOwnerTransferred AuditAction = "system.tenant_owner_transferred"
 	// AuditActionSystemTenantDeleted fires when a SystemAdmin removes a
 	// workspace. Pre-conditions (no non-owner members, target is not the
 	// admin's last home tenant) are enforced at the handler before the
