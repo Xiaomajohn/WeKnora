@@ -2981,6 +2981,12 @@ export default {
         },
       },
       userManagement: {
+        // Top-of-page panel heading. Distinct from `detail.title`,
+        // which is the per-user Drawer header.
+        title: "用户与权限",
+        header: {
+          description: "查看所有注册用户、他们所属的空间与角色，并可在必要时调整账户信息、重置密码或启停用账号。",
+        },
         searchPlaceholder: "搜索用户名或邮箱",
         refresh: "刷新",
         loadMore: "加载更多",
@@ -3171,6 +3177,12 @@ export default {
         },
       },
       spaceManagement: {
+        // Top-of-page panel heading. Distinct from `detail.title`,
+        // which is the per-space Drawer header.
+        title: "空间管理",
+        header: {
+          description: "查看所有注册空间、所有者与成员规模，并可在必要时调整名称、描述或停用空间。",
+        },
         searchPlaceholder: "搜索空间名称",
         refresh: "刷新",
         loading: "加载中...",

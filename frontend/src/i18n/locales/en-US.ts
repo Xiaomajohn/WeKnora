@@ -3976,6 +3976,12 @@ export default {
         },
       },
       userManagement: {
+        // Top-of-page panel heading. Distinct from `detail.title`,
+        // which is the per-user Drawer header.
+        title: 'Users & permissions',
+        header: {
+          description: 'Review every registered user, the workspaces they belong to, and adjust account info, passwords, or activation when needed.',
+        },
         searchPlaceholder: 'Search by username or email',
         refresh: 'Refresh',
         loadMore: 'Load more',
@@ -4166,6 +4172,12 @@ export default {
         },
       },
       spaceManagement: {
+        // Top-of-page panel heading. Distinct from `detail.title`,
+        // which is the per-space Drawer header.
+        title: 'Workspace management',
+        header: {
+          description: 'Review every registered workspace, its owner and membership size, and adjust name, description, or activation when needed.',
+        },
         searchPlaceholder: 'Search by workspace name',
         refresh: 'Refresh',
         loading: 'Loading...',

@@ -132,7 +132,27 @@
       -->
       <SpaceManagement v-if="activeSettingsSection === 'spaces'" />
 
-      <section class="settings-section-panel" :aria-labelledby="`settings-section-${activeSettingsSection}`">
+      <!--
+        Settings-section panel.
+
+        Hidden entirely for the `users` / `spaces` tabs because those
+        tabs are owned by the dedicated <UserManagement> /
+        <SpaceManagement> siblings above (see the per-tab v-if blocks).
+        Rendering this panel there too produced a duplicated "Users &
+        permissions" / "Workspace management" heading plus an empty
+        settings-group (SETTINGS_SECTION_KEYS[users|spaces] is `[]`),
+        which read to operators as "the data is missing below".
+
+        The <UserManagement> / <SpaceManagement> components render
+        their own header (um-header / sm-header) so the operator still
+        gets a labelled surface — they just don't see the duplicate
+        section heading from this parent panel.
+      -->
+      <section
+        v-if="activeSettingsSection !== 'users' && activeSettingsSection !== 'spaces'"
+        class="settings-section-panel"
+        :aria-labelledby="`settings-section-${activeSettingsSection}`"
+      >
         <div class="settings-section-intro">
           <div>
             <h3 :id="`settings-section-${activeSettingsSection}`">{{ activeSectionTitle }}</h3>

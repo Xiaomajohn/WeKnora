@@ -29,8 +29,16 @@
 <template>
   <div class="user-management">
     <div class="um-header">
-      <h3>{{ t('system.globalSettings.userManagement.detail.title') }}</h3>
-      <p>{{ t('system.globalSettings.userManagement.detail.description') }}</p>
+      <!--
+        Header copy. Uses `userManagement.title` (the top-level panel
+        label) rather than `userManagement.detail.title` — the latter
+        is the Drawer header for the per-user detail panel and reads
+        "用户详情" / "User detail", which here rendered as a stray
+        "用户详情" above the actual table and made operators think
+        the data was sitting under a different heading.
+      -->
+      <h3>{{ t('system.globalSettings.userManagement.title') }}</h3>
+      <p>{{ t('system.globalSettings.userManagement.header.description') }}</p>
     </div>
 
     <div class="um-toolbar">

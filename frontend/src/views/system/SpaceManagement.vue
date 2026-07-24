@@ -26,8 +26,17 @@
 <template>
   <div class="space-management">
     <div class="sm-header">
-      <h3>{{ t('system.globalSettings.spaceManagement.detail.title') }}</h3>
-      <p>{{ t('system.globalSettings.spaceManagement.detail.description') }}</p>
+      <!--
+        Header copy. Uses `spaceManagement.title` (the top-level panel
+        label) rather than `spaceManagement.detail.title` — the latter
+        is the Drawer header for the per-space detail panel. Without
+        this, the panel rendered a stray "空间详情" / "Space detail"
+        above the table and the duplicate "空间管理" heading from the
+        parent panel read as if the data was sitting under a different
+        heading. See UserManagement.vue for the parallel fix.
+      -->
+      <h3>{{ t('system.globalSettings.spaceManagement.title') }}</h3>
+      <p>{{ t('system.globalSettings.spaceManagement.header.description') }}</p>
     </div>
 
     <div class="sm-toolbar">
