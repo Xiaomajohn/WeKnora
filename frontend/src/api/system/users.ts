@@ -231,6 +231,19 @@ export interface CreateUserRequest {
   password: string
   /** Defaults to true on the server when omitted. */
   is_active?: boolean
+  /**
+   * Optional workspace to enroll the new user into. When supplied,
+   * `tenant_role` must also be supplied; both are ignored otherwise.
+   * Backend: POST /api/v1/system/admin/users (SystemAdmin only).
+   */
+  tenant_id?: number
+  /**
+   * Role to grant the new user inside `tenant_id`. Must pair with
+   * `tenant_id`. Role=owner also pins the user's home tenant so they
+   * land inside that workspace on first login; other roles leave
+   * TenantID=0 and the user picks a home workspace via onboarding.
+   */
+  tenant_role?: TenantRole
 }
 
 /**

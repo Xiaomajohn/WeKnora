@@ -708,6 +708,58 @@
         >
           <t-switch v-model="createForm.isActive" :disabled="createSubmitting" />
         </t-form-item>
+        <!--
+          Workspace + role enrollment. Optional: leaving the workspace
+          unset keeps the legacy tenantless flow (the operator can
+          follow up via "Add to workspace"). When a workspace is
+          chosen, the role defaults to contributor — the "use but
+          don't configure" landing role that hides the ollama / vector /
+          MCP / ... settings tabs. Picking role=owner additionally
+          pins the user's home tenant so they land inside that
+          workspace on first login; other roles leave TenantID=0 and
+          the user picks a home workspace via onboarding.
+        -->
+        <t-form-item
+          :label="t('system.globalSettings.userManagement.createDialog.fields.tenant')"
+          name="tenantId"
+        >
+          <t-select
+            v-model="createForm.tenantId"
+            :loading="availableTenantsLoading"
+            :placeholder="t('system.globalSettings.userManagement.createDialog.tenantPlaceholder')"
+            filterable
+            clearable
+          >
+            <t-option
+              v-for="tn in allTenants"
+              :key="tn.id"
+              :label="tn.name"
+              :value="tn.id"
+            />
+          </t-select>
+        </t-form-item>
+        <t-form-item
+          :label="t('system.globalSettings.userManagement.createDialog.fields.tenantRole')"
+          name="tenantRole"
+        >
+          <t-select
+            v-model="createForm.tenantRole"
+            :placeholder="t('system.globalSettings.userManagement.createDialog.tenantRolePlaceholder')"
+          >
+            <t-option
+              v-for="r in tenantCreationRoles"
+              :key="r"
+              :label="t(`system.globalSettings.userManagement.roleLabels.${r}`)"
+              :value="r"
+            />
+          </t-select>
+        </t-form-item>
+        <p
+          v-if="createForm.tenantId === undefined || createForm.tenantId === null"
+          class="um-create-hint"
+        >
+          {{ t('system.globalSettings.userManagement.createDialog.tenantHelp') }}
+        </p>
       </t-form>
     </t-dialog>
 
@@ -965,6 +1017,16 @@ const memberAdditionRoles: TenantRole[] = ['admin', 'contributor', 'viewer']
 // Same set as memberAdditionRoles — Owner is reachable only via the
 // dedicated ownership-transfer surface (SpaceManagement edit).
 const availableRoles: TenantRole[] = ['admin', 'contributor', 'viewer']
+
+// Role choices offered in the "create user" dialog when a workspace
+// is selected. Unlike memberAdditionRoles / availableRoles (both
+// exclude Owner because the post-hoc AddMember endpoint can't promote
+// a tenantless recipient to Owner), the SystemAdmin create-user path
+// goes through the same single-shot AddMember + UpdateUser pair as
+// the registration flow, so Owner is a legitimate landing here — the
+// backend pins TenantID so the new Owner lands inside their workspace
+// on first login.
+const tenantCreationRoles: TenantRole[] = ['owner', 'admin', 'contributor', 'viewer']
 
 // ---------------------------------------------------------------------------
 // List lifecycle
@@ -1573,6 +1635,14 @@ const createForm = reactive({
   password: '',
   confirmPassword: '',
   isActive: true,
+  // Optional same-trip workspace + role enrollment. When tenantId is
+  // set, tenantRole must also be set (mirrors the backend's atomic-pair
+  // rule) and the backend pins the user's home tenant on role=owner.
+  // Unset pairs stay "tenantless" — the operator can follow up via the
+  // "Add to workspace" dialog afterwards, just like the original P3
+  // surface used to require.
+  tenantId: undefined as number | undefined,
+  tenantRole: 'contributor' as TenantRole,
 })
 
 const createRules: Record<string, FormRule[]> = {
@@ -1599,6 +1669,39 @@ const createRules: Record<string, FormRule[]> = {
       trigger: 'blur',
     },
   ],
+  // Tenant + role form a single "enroll this user into a workspace"
+  // step. We don't force them to be set (the legacy tenantless flow
+  // still works), but if one half is filled the other must be too —
+  // mirrors the backend's atomic-pair rule so the operator sees the
+  // mismatch immediately instead of after a round-trip.
+  tenantId: [
+    {
+      validator: (_val: unknown) => {
+        const hasTenant = createForm.tenantId !== undefined && createForm.tenantId !== null
+        const hasRole = !!createForm.tenantRole
+        if (hasTenant && !hasRole) {
+          return false
+        }
+        return true
+      },
+      message: t('system.globalSettings.userManagement.createDialog.validation.tenantRoleRequired'),
+      trigger: 'change',
+    },
+  ],
+  tenantRole: [
+    {
+      validator: (_val: unknown) => {
+        const hasTenant = createForm.tenantId !== undefined && createForm.tenantId !== null
+        const hasRole = !!createForm.tenantRole
+        if (hasTenant && !hasRole) {
+          return false
+        }
+        return true
+      },
+      message: t('system.globalSettings.userManagement.createDialog.validation.tenantRoleRequired'),
+      trigger: 'change',
+    },
+  ],
 }
 
 function openCreate() {
@@ -1607,7 +1710,19 @@ function openCreate() {
   createForm.password = ''
   createForm.confirmPassword = ''
   createForm.isActive = true
+  // Default workspace-enrollment fields to "no assignment" so the
+  // legacy tenantless flow keeps working. Operators opt in by picking
+  // a workspace from the dropdown; the role defaults to contributor,
+  // the most common "use-but-don't-configure" landing.
+  createForm.tenantId = undefined
+  createForm.tenantRole = 'contributor'
   createVisible.value = true
+  // Fire-and-forget: refresh the workspace list so the dropdown
+  // reflects the latest set the operator can choose from. The existing
+  // add-membership dialog shares the same `allTenants` cache, so
+  // reopening this dialog immediately after an add shows up-to-date
+  // options without a second round-trip.
+  void loadAllTenants()
 }
 
 async function submitCreate() {
@@ -1619,14 +1734,24 @@ async function submitCreate() {
       return
     }
   }
+  // Translate the (tenantId, tenantRole) pair into the backend's
+  // atomic-pair wire shape. When both are set we send them through;
+  // otherwise we omit both so the backend keeps the legacy tenantless
+  // behaviour — the operator can always follow up via "Add to
+  // workspace" from the detail drawer.
+  const payload: Parameters<typeof createUser>[0] = {
+    username: createForm.username.trim(),
+    email: createForm.email.trim().toLowerCase(),
+    password: createForm.password,
+    is_active: createForm.isActive,
+  }
+  if (createForm.tenantId !== undefined && createForm.tenantId !== null) {
+    payload.tenant_id = createForm.tenantId
+    payload.tenant_role = createForm.tenantRole
+  }
   createSubmitting.value = true
   try {
-    await createUser({
-      username: createForm.username.trim(),
-      email: createForm.email.trim().toLowerCase(),
-      password: createForm.password,
-      is_active: createForm.isActive,
-    })
+    await createUser(payload)
     MessagePlugin.success(t('system.globalSettings.userManagement.createDialog.success'))
     createVisible.value = false
     await reload()
@@ -1902,6 +2027,16 @@ async function submitDelete() {
   color: var(--td-text-color-secondary, #666);
   font-size: 13px;
   margin: 0 0 12px;
+  padding: 8px 12px;
+  background: var(--td-bg-color-secondary-container, #f5f5f5);
+  border-radius: 4px;
+}
+
+.um-create-hint {
+  color: var(--td-text-color-secondary, #666);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: -4px 0 4px;
   padding: 8px 12px;
   background: var(--td-bg-color-secondary-container, #f5f5f5);
   border-radius: 4px;

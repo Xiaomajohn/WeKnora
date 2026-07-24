@@ -2538,11 +2538,24 @@ func (h *SystemHandler) ResetSystemSetting(c *gin.Context) {
 // CreateUserRequest is the JSON body for POST /system/admin/users. The
 // password is the only field not exposed through UserInfo / GetUserDetail —
 // we deliberately do not echo it back in any response.
+//
+// TenantID + TenantRole are an optional pair: when both are supplied, the
+// freshly-created user is also enrolled into the given workspace with the
+// given role in a single round-trip (SystemAdmin surface, no Owner gate).
+// The membership is created via TenantMemberService.AddMember so the same
+// "last-Owner" / duplicate-membership guards the per-tenant surface uses
+// still apply. If TenantRole is "owner", the user's TenantID (home
+// tenant) is also pinned to that workspace so they land directly inside
+// it on first login. When the pair is omitted, behaviour matches the
+// original P3 surface: the user lands tenantless (TenantID=0) and is
+// enrolled separately from the workspace-management surface.
 type CreateUserRequest struct {
-	Username string `json:"username" binding:"required,min=1,max=100"`
-	Email    string `json:"email"    binding:"required,email"`
-	Password string `json:"password" binding:"required,min=8,max=32"`
-	IsActive *bool  `json:"is_active,omitempty"`
+	Username   string            `json:"username"     binding:"required,min=1,max=100"`
+	Email      string            `json:"email"        binding:"required,email"`
+	Password   string            `json:"password"     binding:"required,min=8,max=32"`
+	IsActive   *bool             `json:"is_active,omitempty"`
+	TenantID   *uint64           `json:"tenant_id,omitempty"`
+	TenantRole *types.TenantRole `json:"tenant_role,omitempty"`
 }
 
 // CreateUser godoc
@@ -2553,13 +2566,21 @@ type CreateUserRequest struct {
 // @Description  through the space-management surface if needed. Password
 // @Description  must satisfy the project password policy
 // @Description  (8-32 chars, must include a letter and a number).
-// @Description  Duplicate email / username returns 400.
+// @Description  Duplicate email / username returns 400. Optional
+// @Description  tenant_id + tenant_role pair, when supplied together,
+// @Description  enrolls the new user into the named workspace with the
+// @Description  given role in the same round-trip (no Owner gate on the
+// @Description  SystemAdmin surface). role=owner also pins the user's
+// @Description  home tenant so they land inside that workspace on first
+// @Description  login; other roles leave TenantID=0 and the user picks a
+// @Description  home workspace via onboarding. Invalid role / unknown
+// @Description  workspace returns 400.
 // @Tags         System Admin
 // @Accept       json
 // @Produce      json
 // @Param        request body CreateUserRequest true "New user fields"
 // @Success      201 {object} types.UserInfo "User created"
-// @Failure      400 {object} map[string]interface{} "Validation / collision / weak password"
+// @Failure      400 {object} map[string]interface{} "Validation / collision / weak password / invalid role / unknown workspace"
 // @Failure      403 {object} map[string]interface{} "Forbidden: not a system admin"
 // @Router       /system/admin/users [post]
 func (h *SystemHandler) CreateUser(c *gin.Context) {
@@ -2578,6 +2599,35 @@ func (h *SystemHandler) CreateUser(c *gin.Context) {
 	email := strings.TrimSpace(strings.ToLower(req.Email))
 	if username == "" || email == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "username and email are required"})
+		return
+	}
+
+	// Workspace + role are an atomic pair: either both supplied (and we
+	// enroll the new user into the workspace) or both omitted (legacy
+	// tenantless behaviour). One-sided payloads are rejected so the front
+	// end can't accidentally create a user with a half-formed membership.
+	var (
+		enrollTenantID uint64
+		enrollRole     types.TenantRole
+		wantEnroll     bool
+	)
+	switch {
+	case req.TenantID == nil && req.TenantRole == nil:
+		wantEnroll = false
+	case req.TenantID != nil && req.TenantRole != nil:
+		if *req.TenantID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_id must be a positive integer"})
+			return
+		}
+		if !req.TenantRole.IsValid() {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "role must be one of owner/admin/contributor/viewer"})
+			return
+		}
+		enrollTenantID = *req.TenantID
+		enrollRole = *req.TenantRole
+		wantEnroll = true
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_id and tenant_role must be supplied together"})
 		return
 	}
 
@@ -2611,11 +2661,99 @@ func (h *SystemHandler) CreateUser(c *gin.Context) {
 		return
 	}
 
-	h.emitAdminAudit(ctx, types.AuditActionSystemUserCreated, newUser, map[string]any{
+	auditDetails := map[string]any{
 		"target_email":    newUser.Email,
 		"target_username": newUser.Username,
 		"password_set":    true,
-	})
+	}
+
+	// Optional same-trip enrollment into a workspace. The SystemAdmin
+	// surface bypasses the per-tenant Owner gate (the route group is
+	// already SystemAdmin-gated; we don't re-check Owner here so a
+	// platform admin can populate any workspace). We still validate the
+	// workspace exists and let the TenantMemberService handle the
+	// "membership already exists" / "last Owner" guards the per-tenant
+	// AddMember endpoint applies.
+	if wantEnroll {
+		if h.tenantSvc == nil || h.tenantMemberService == nil {
+			logger.Errorf(ctx,
+				"CreateUser: tenantService / tenantMemberService unavailable, cannot enroll new user into workspace %d",
+				enrollTenantID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to enroll user into workspace: service unavailable"})
+			return
+		}
+		tenant, terr := h.tenantSvc.GetTenantByID(ctx, enrollTenantID)
+		if terr != nil || tenant == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "workspace not found"})
+			return
+		}
+		callerID, _ := types.UserIDFromContext(ctx)
+		var inviter *string
+		if callerID != "" {
+			inviter = &callerID
+		}
+		if _, aerr := h.tenantMemberService.AddMember(ctx, newUser.ID, enrollTenantID, enrollRole, inviter); aerr != nil {
+			logger.Errorf(ctx,
+				"CreateUser: AddMember failed for new user %s into workspace %d role=%s: %v",
+				newUser.ID, enrollTenantID, enrollRole, aerr)
+			// Best-effort rollback: the user row was already written, so
+			// without this cleanup the caller would see a "user creation
+			// failed" error yet find a tenantless orphan in the user list.
+			// Mirrors the rollback pattern used by userService.Register
+			// when EnsureOwner fails after the user + tenant are already
+			// created. DeleteUser failure here is logged but not surfaced —
+			// the original AddMember error is more actionable for the
+			// operator and a follow-up manual delete is always possible.
+			if delErr := h.userSvc.DeleteUser(ctx, newUser.ID); delErr != nil {
+				logger.Errorf(ctx,
+					"CreateUser: best-effort rollback DeleteUser for %s failed: %v",
+					newUser.ID, delErr)
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to enroll user into workspace: " + aerr.Error()})
+			return
+		}
+		auditDetails["enrolled_tenant_id"] = enrollTenantID
+		auditDetails["enrolled_role"] = string(enrollRole)
+		// Owners also get the home-tenant pointer so they land inside
+		// that workspace on first login. userService.CreateUser forced
+		// TenantID=0 above; flip it here via the existing UpdateUser
+		// path (the only place that persists TenantID changes). Other
+		// roles leave TenantID=0 so the user picks a home workspace
+		// via the standard onboarding flow — this keeps the invariant
+		// "home tenant is always reachable" intact for non-Owners.
+		if enrollRole == types.TenantRoleOwner {
+			newUser.TenantID = enrollTenantID
+			if uerr := h.userSvc.UpdateUser(ctx, newUser); uerr != nil {
+				logger.Errorf(ctx,
+					"CreateUser: UpdateUser (set home tenant) failed for new user %s: %v",
+					newUser.ID, uerr)
+				// Best-effort rollback: we already created the membership
+				// row above, so undo both pieces before reporting the
+				// failure. RemoveMember cannot trip the "last Owner"
+				// guard here because AddMember just succeeded a moment
+				// ago — the tenant therefore has at least one other
+				// active Owner (or zero, in which case this new user is
+				// the only owner and RemoveOwnerAtomically will fail,
+				// which we surface in the log so the operator knows a
+				// manual cleanup is needed).
+				if rmErr := h.tenantMemberService.RemoveMember(ctx, newUser.ID, enrollTenantID); rmErr != nil {
+					logger.Errorf(ctx,
+						"CreateUser: best-effort rollback RemoveMember for %s in workspace %d failed: %v",
+						newUser.ID, enrollTenantID, rmErr)
+				}
+				if delErr := h.userSvc.DeleteUser(ctx, newUser.ID); delErr != nil {
+					logger.Errorf(ctx,
+						"CreateUser: best-effort rollback DeleteUser for %s failed: %v",
+						newUser.ID, delErr)
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to set home workspace for new owner"})
+				return
+			}
+			auditDetails["home_tenant_set"] = true
+		}
+	}
+
+	h.emitAdminAudit(ctx, types.AuditActionSystemUserCreated, newUser, auditDetails)
 
 	c.JSON(http.StatusCreated, newUser.ToUserInfo())
 }
