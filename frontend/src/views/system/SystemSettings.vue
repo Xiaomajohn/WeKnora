@@ -851,18 +851,38 @@ const SETTINGS_SECTION_KEYS: Record<Exclude<SettingsSection, 'other'>, readonly 
 // directly on the UserManagement surface (SystemManagement UX asked for a
 // direct bookmark; the 'users' / 'spaces' tabs are not settable via the
 // Tabs v-model seed so we have to read the query here).
+//
+// The IIFE only seeds the initial ref value; TDesign <t-tabs> has been
+// observed to ignore a v-model seed set at setup() and snap to the first
+// declared panel during its own mount phase. The watch below with
+// `immediate: true` re-applies the seed after mount *and* on every
+// subsequent route.query.tab change, so operators using the deep-link
+// banner from UserProfile land on the right tab reliably (issue: deep-link
+// left users stranded on Access and made the UserManagement view look
+// "empty" — it simply wasn't mounted).
 const route = useRoute()
 const validSections: ReadonlySet<SettingsSection> = new Set([
   'access', 'tenant', 'runtime', 'security', 'users', 'spaces', 'other',
 ])
-const initialTab = ((): SettingsSection => {
-  const raw = (route.query.tab as string | undefined)?.toLowerCase()
-  if (raw && (validSections as Set<string>).has(raw)) {
-    return raw as SettingsSection
+function resolveSectionFromTab(raw: unknown): SettingsSection {
+  if (typeof raw !== 'string') return 'access'
+  const lowered = raw.toLowerCase()
+  if ((validSections as Set<string>).has(lowered)) {
+    return lowered as SettingsSection
   }
   return 'access'
-})()
-const activeSettingsSection = ref<SettingsSection>(initialTab)
+}
+const activeSettingsSection = ref<SettingsSection>(resolveSectionFromTab(route.query.tab))
+watch(
+  () => route.query.tab,
+  (next) => {
+    const resolved = resolveSectionFromTab(next)
+    if (activeSettingsSection.value !== resolved) {
+      activeSettingsSection.value = resolved
+    }
+  },
+  { immediate: true },
+)
 const knownSettingKeys = new Set(Object.values(SETTINGS_SECTION_KEYS).flat())
 const settingsByKey = computed(() => new Map(settings.value.map((item) => [item.key, item])))
 const unknownSettings = computed(() => settings.value.filter((item) => !knownSettingKeys.has(item.key)))
