@@ -253,6 +253,32 @@
         <t-loading :text="t('system.globalSettings.userManagement.loading')" />
       </div>
       <div v-else-if="detail" class="um-detail">
+        <!--
+          Drawer-level guidance. The header slot on <t-drawer> only
+          carries a single title row, so the multi-line description
+          lives inside the body — same pattern as TenantMembers.vue's
+          audit drawer. The text is intentionally present-tense so
+          the operator knows the per-row actions (role select /
+          remove button / Add to workspace) are reachable when the
+          drawer is opened for someone other than themselves.
+        -->
+        <p class="um-detail-description">
+          {{ t('system.globalSettings.userManagement.detail.description') }}
+        </p>
+        <!--
+          Self-edit guard. The per-row controls (add / role-change /
+          remove) all carry `v-if="detail.id !== currentUserId"`, so
+          when the operator opens their own drawer everything below
+          looks read-only with no explanation. Surface an explicit
+          notice so the lack of buttons doesn't read as "this isn't
+          implemented".
+        -->
+        <t-alert
+          v-if="detail.id === currentUserId"
+          theme="info"
+          :message="t('system.globalSettings.userManagement.detail.selfNotice')"
+          class="um-detail-self-notice"
+        />
         <div class="um-detail-section">
           <h4>{{ t('system.globalSettings.userManagement.detail.accountSection') }}</h4>
           <dl class="um-detail-fields">
@@ -1741,6 +1767,23 @@ async function submitDelete() {
   display: flex;
   flex-direction: column;
   gap: 24px;
+}
+
+.um-detail-description {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--td-bg-color-secondary-container, #f5f5f5);
+  border-radius: 4px;
+  color: var(--td-text-color-secondary, #666);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.um-detail-self-notice {
+  /* Negative margin to keep the 24px section gap looking consistent
+     with the other um-detail-section blocks; t-alert adds its own
+     padding internally so this only nudges outer spacing. */
+  margin: -16px 0 0;
 }
 
 .um-detail-section h4 {

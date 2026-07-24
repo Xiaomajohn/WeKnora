@@ -4081,6 +4081,7 @@ export default {
           membershipRoleChanged: 'Role updated',
           membershipRemoved: 'User removed from workspace',
           membershipActionFailed: 'Operation failed, please try again',
+          selfNotice: 'This is your own account — workspace membership and roles cannot be changed here. Ask another system administrator if changes are needed.',
         },
         editDialog: {
           title: 'Edit user',

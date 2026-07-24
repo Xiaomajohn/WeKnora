@@ -3086,6 +3086,7 @@ export default {
           membershipRoleChanged: "角色已更新",
           membershipRemoved: "已将用户移出该空间",
           membershipActionFailed: "操作失败，请稍后重试",
+          selfNotice: "这是您自己的账户：此处无法调整您的空间归属或角色，请联系其他系统管理员。",
         },
         editDialog: {
           title: "编辑用户",
