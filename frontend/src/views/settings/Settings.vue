@@ -302,6 +302,20 @@ const normalizeSettingsSection = (section: string) => {
 }
 
 const canSeeSection = (key: string): boolean => {
+  // User-level gate: normal-role accounts are forbidden from entering
+  // ANY Settings section, regardless of per-tenant role. System
+  // administrators and cross-tenant platform admins bypass here. The
+  // route-level meta.requiresUserLevelAdmin + router.beforeEach is the
+  // strong protection; this is the in-page second line of defence so
+  // the modal drawer / deep-link to a specific section key still
+  // bounces without re-rendering the whole sub-tree.
+  if (
+    !authStore.isAllowedToEnterSettings &&
+    !authStore.isSystemAdmin &&
+    !authStore.canAccessAllTenants
+  ) {
+    return false
+  }
   // 邀请注册用户：隐藏 members / models 两个 section。
   // superuser（canAccessAllTenants）豁免，避免平台管理员被这条规则误伤。
   if (
@@ -475,6 +489,19 @@ const handleSubMenuClick = (parentKey: string, childKey: string) => {
 
 // 控制弹窗显示
 const visible = computed(() => {
+  // User-level gate: never render the Settings modal for normal-role
+  // accounts. The route guard already bounces URL hits; this closes the
+  // parallel "uiStore.openSettings(...) invoked from a child component"
+  // path so any deep invoker lands on a no-op rather than a half-
+  // rendered section. System administrators and cross-tenant admins
+  // bypass.
+  if (
+    !authStore.isAllowedToEnterSettings &&
+    !authStore.isSystemAdmin &&
+    !authStore.canAccessAllTenants
+  ) {
+    return false
+  }
   return route.path === '/platform/settings' || uiStore.showSettingsModal
 })
 

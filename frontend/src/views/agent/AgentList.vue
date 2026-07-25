@@ -831,6 +831,7 @@ import TenantModelsGuide from '@/components/TenantModelsGuide.vue'
 import { markContextualGuideDone } from '@/config/contextualGuides'
 import { useTenantModelReadiness } from '@/composables/useTenantModelReadiness'
 import { useUIStore } from '@/stores/ui'
+import { safeOpenSettings } from '@/utils/safeOpenSettings'
 import AgentAvatar from '@/components/AgentAvatar.vue'
 import ListSpaceSidebar from '@/components/ListSpaceSidebar.vue'
 import ResourceOriginBadge from '@/components/ResourceOriginBadge.vue'
@@ -1570,7 +1571,11 @@ const openCreateModal = () => {
 const handleCreateAgent = () => {
   if (!isReadyForAgent.value) {
     MessagePlugin.warning(t('contextualGuide.tenantModels.needChatModelFirst'))
-    uiStore.openSettings('models')
+    // user-level gate: same rules as the 25 inventory entry points.
+    // Normal-role users would have been redirected by the route guard
+    // already, but a click on "create agent" from this view shouldn't
+    // route them into the Settings modal.
+    safeOpenSettings(router, 'models')
     return
   }
   markContextualGuideDone('agentList')

@@ -126,8 +126,10 @@
           superuser 豁免：即便他恰好也走 share-link 注册，
           平台管理员仍可正常进入设置。
           —— 分隔线一同条件化，避免 invite 用户下拉里出现孤立横线。
+          —— 额外：user-level gate (normal 永远看不见；settings 入口
+          路由也有 meta.requiresUserLevelAdmin + beforeEach 作为强保护)。
         -->
-        <template v-if="!authStore.registeredViaInvite || authStore.canAccessAllTenants">
+        <template v-if="authStore.isAllowedToEnterSettings && (!authStore.registeredViaInvite || authStore.canAccessAllTenants)">
           <div class="menu-divider"></div>
           <div class="menu-item" @click="handleSettings">
             <t-icon name="setting" class="menu-icon" />
@@ -299,6 +301,16 @@ const QUICKNAV_MIN_ROLE: Record<string, 'viewer' | 'contributor' | 'admin' | 'ow
 // 用户的现实影响微乎其微，不在本次需求范围。
 const QUICKNAV_INVITE_HIDDEN: ReadonlySet<string> = new Set(['members', 'models'])
 const canSeeQuickNav = (key: string): boolean => {
+  // User-level gate: the platform-level role predates any tenant-
+  // relative check. A normal-role account should never see any of the
+  // Settings-section quick nav entries — they all jump into a
+  // user-level-gated Settings modal and would just bounce.
+  // canAccessAllTenants bypasses (the superuser surface) and
+  // isSystemAdmin keep working through these branches; only the bottom
+  // tenant-role branch is affected by the new top-level check.
+  if (!authStore.isAllowedToEnterSettings && !authStore.canAccessAllTenants) {
+    return false
+  }
   if (authStore.canAccessAllTenants) return true
   if (authStore.registeredViaInvite && QUICKNAV_INVITE_HIDDEN.has(key)) return false
   return authStore.hasRole(QUICKNAV_MIN_ROLE[key] ?? 'viewer')

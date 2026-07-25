@@ -615,6 +615,16 @@ func (s *userService) CreateUser(ctx context.Context, user *types.User) error {
 	// workspace assignment happens later via the admin space surface.
 	user.TenantID = 0
 	user.RegisteredViaInvite = false
+	// UserRole: default to 'normal' when omitted (legacy callers and any
+	// future entry point that forgets the field). Callers (SystemHandler
+	// .CreateUser) may pre-set 'admin' / 'normal' on the passed struct; we
+	// still validate here as a defense-in-depth gate so a misbehaving
+	// caller cannot smuggle arbitrary values into the column.
+	if user.UserRole == "" {
+		user.UserRole = "normal"
+	} else if user.UserRole != "normal" && user.UserRole != "admin" {
+		return fmt.Errorf("invalid user_role %q (must be 'normal' or 'admin')", user.UserRole)
+	}
 	user.CreatedAt = time.Now()
 	user.UpdatedAt = time.Now()
 

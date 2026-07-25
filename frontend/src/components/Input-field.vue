@@ -22,6 +22,7 @@ import { type CustomAgent, BUILTIN_QUICK_ANSWER_ID, BUILTIN_SMART_REASONING_ID }
 import { useChatResourcesStore } from '@/stores/chatResources';
 import { useEditorResourcesStore } from '@/stores/editorResources';
 import { useI18n } from 'vue-i18n';
+import { safeOpenSettings } from '@/utils/safeOpenSettings';
 import AttachmentUpload, { type AttachmentFile } from './AttachmentUpload.vue';
 import {
   kbSatisfiesAgentRequirements,
@@ -979,14 +980,16 @@ watch(
 );
 
 const handleGoToConversationModels = () => {
+  // User-level gate: normal-role users are forbidden from any Settings
+  // entry; safeOpenSettings returns false (and pops a toast) instead of
+  // routing them into the modal they can't use. Same gate covers all 25
+  // entry points so we can't drift between handlers.
   showModelSelector.value = false;
-  router.push('/platform/settings');
-  setTimeout(() => {
-    const event = new CustomEvent('settings-nav', {
-      detail: { section: 'models', subsection: 'chat' },
-    });
-    window.dispatchEvent(event);
-  }, 100);
+  if (!safeOpenSettings(router, 'models', 'chat')) return;
+  // safeOpenSettings already pushed the URL with section+subSection; the
+  // watcher on uiStore.settingsInitialSection inside Settings.vue will
+  // expand the menu and scroll to the chat subsection, so the historical
+  // 'settings-nav' custom event is no longer needed.
 };
 
 const handleModelChange = (value: string | number | Array<string | number> | undefined) => {
@@ -2232,10 +2235,14 @@ const onDragOver = (e: DragEvent) => {
 };
 
 const handleGoToWebSearchSettings = () => {
-  uiStore.openSettings('websearch');
-  if (route.path !== '/platform/settings') {
-    router.push('/platform/settings');
-  }
+  // User-level gate: normal-role accounts must not be routed into any
+  // Settings subsection; safeOpenSettings pops a toast and returns false
+  // when blocked, otherwise opens the websearch section and pushes the
+  // /platform/settings URL (section query handles deep-link).
+  if (!safeOpenSettings(router, 'websearch')) return;
+  // safeOpenSettings already pushed the URL with section; the Settings
+  // page watcher picks it up. No-op the historical `if (route.path !==
+  // '/platform/settings') router.push(...)` check since push is idempotent.
 };
 
 const handleGoToWebSearchConfig = () => {

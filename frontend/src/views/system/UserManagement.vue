@@ -532,6 +532,32 @@
         >
           <t-switch v-model="editForm.isActive" :disabled="editSubmitting" />
         </t-form-item>
+        <!--
+          Platform-level user role. Editing is disabled when the target
+          user is a SystemAdmin — the backend rejects writes to
+          user_role on IsSystemAdmin=true accounts (user_role is
+          governed by the system-admin lifecycle). We mirror the
+          server rule here so the UI doesn't ship a request the
+          backend will reject.
+        -->
+        <t-form-item
+          :label="t('system.globalSettings.userManagement.editDialog.fields.userRole')"
+          name="userRole"
+        >
+          <t-radio-group
+            v-model="editForm.userRole"
+            :disabled="editSubmitting || (editSnapshot?.is_system_admin === true)"
+          >
+            <t-radio value="normal">{{ t('userRoles.normal') }}</t-radio>
+            <t-radio value="admin">{{ t('userRoles.admin') }}</t-radio>
+          </t-radio-group>
+          <p
+            v-if="editSnapshot?.is_system_admin === true"
+            class="um-edit-hint"
+          >
+            {{ t('system.globalSettings.userManagement.editDialog.systemAdminLocked') }}
+          </p>
+        </t-form-item>
       </t-form>
     </t-dialog>
 
@@ -708,6 +734,25 @@
         >
           <t-switch v-model="createForm.isActive" :disabled="createSubmitting" />
         </t-form-item>
+        <!--
+          Platform-level user role radio. Defaults to 'normal' so the
+          freshly-created account can't see the Settings page; picking
+          '用户级管理员' grants Settings access without touching the
+          SystemAdmin lifecycle. The help copy underneath clarifies
+          the scope: orthogonal to per-tenant tenantRole.
+        -->
+        <t-form-item
+          :label="t('system.globalSettings.userManagement.createDialog.fields.userRole')"
+          name="userRole"
+        >
+          <t-radio-group v-model="createForm.userRole" :disabled="createSubmitting">
+            <t-radio value="normal">{{ t('userRoles.normal') }}</t-radio>
+            <t-radio value="admin">{{ t('userRoles.admin') }}</t-radio>
+          </t-radio-group>
+        </t-form-item>
+        <p class="um-create-hint">
+          {{ t('system.globalSettings.userManagement.createDialog.userRoleHelp') }}
+        </p>
         <!--
           Workspace + role enrollment. Optional: leaving the workspace
           unset keeps the legacy tenantless flow (the operator can
@@ -1418,6 +1463,13 @@ const editForm = reactive({
   username: '',
   email: '',
   isActive: true,
+  // Platform-level user role. Editing is locked when the target user
+  // is a SystemAdmin — backend rejects writes to user_role on
+  // IsSystemAdmin=true accounts (the field is governed by the system-
+  // admin lifecycle, not this dialog). The form-item mirrors this
+  // server rule with a `:disabled` binding; the UI hint
+  // `systemAdminLocked` surfaces when the locked state is active.
+  userRole: 'normal' as 'normal' | 'admin',
 })
 
 const editRules: Record<string, FormRule[]> = {
@@ -1442,6 +1494,12 @@ function openEdit(row: AdminUserListItem | AdminUserDetailResponse) {
   editForm.username = row.username
   editForm.email = row.email
   editForm.isActive = row.is_active
+  // user_role is always set on the row now (server guarantees the
+  // column has a non-null default 'normal'). The form-item below is
+  // :disabled when row.is_system_admin so the operator can't drift
+  // the platform role of a super-admin away from system-admin
+  // authority; backend enforces the same rule.
+  editForm.userRole = (row as AdminUserListItem).user_role
   editVisible.value = true
 }
 
@@ -1457,6 +1515,17 @@ function buildEditPayload(): UpdateUserRequest | null {
   }
   if (editForm.isActive !== snap.is_active) {
     payload.is_active = editForm.isActive
+  }
+  // user_role: only emit when the row is non-sysadmin. The form-item
+  // is :disabled in that case, but a programmatic editor (or stale
+  // data from before the new field existed) could still ship a write;
+  // gating here keeps the dialog "save" behaviour equivalent to the
+  // rendered control.
+  if (
+    !snap.is_system_admin &&
+    editForm.userRole !== snap.user_role
+  ) {
+    payload.user_role = editForm.userRole
   }
   return Object.keys(payload).length > 0 ? payload : null
 }
@@ -1492,6 +1561,10 @@ async function submitEdit() {
         email: updated.email,
         is_active: updated.is_active,
         is_system_admin: updated.is_system_admin,
+        // Mirror the server-canonical user_role so the table view
+        // (future user_role column / future filter) reflects the change
+        // without re-fetching the list.
+        user_role: updated.user_role,
         created_at: updated.created_at,
         updated_at: updated.updated_at,
       }
@@ -1635,6 +1708,13 @@ const createForm = reactive({
   password: '',
   confirmPassword: '',
   isActive: true,
+  // Platform-level role that controls whether the new account can see
+  // any Settings entry points. Distinct from tenantRole (per-workspace).
+  // Default to 'normal' so a freshly-created account inherits the same
+  // minimum surface as a self-registered user; SystemAdmins opt in by
+  // picking '用户级管理员'. Mirrors the backend's default 'normal' +
+  // oneof('normal', 'admin') contract.
+  userRole: 'normal' as 'normal' | 'admin',
   // Optional same-trip workspace + role enrollment. When tenantId is
   // set, tenantRole must also be set (mirrors the backend's atomic-pair
   // rule) and the backend pins the user's home tenant on role=owner.
@@ -1667,6 +1747,18 @@ const createRules: Record<string, FormRule[]> = {
       validator: (val: string) => val === createForm.password,
       message: t('system.globalSettings.userManagement.createDialog.validation.passwordMismatch'),
       trigger: 'blur',
+    },
+  ],
+  // Platform-level role. oneof('normal', 'admin') on the server; the
+  // form keeps the radio bound to one of those literals so the validator
+  // is mostly defensive — catches a malformed default from a future
+  // field renames.
+  userRole: [
+    {
+      validator: (_val: unknown) =>
+        createForm.userRole === 'normal' || createForm.userRole === 'admin',
+      message: t('system.globalSettings.userManagement.createDialog.validation.userRoleInvalid'),
+      trigger: 'change',
     },
   ],
   // Tenant + role form a single "enroll this user into a workspace"
@@ -1710,6 +1802,10 @@ function openCreate() {
   createForm.password = ''
   createForm.confirmPassword = ''
   createForm.isActive = true
+  // Default to 'normal' so the freshly created account inherits the
+  // minimum UI surface. Operators opt in to "用户级管理员" via the
+  // radio group in the dialog; the radio is bound to createForm.userRole.
+  createForm.userRole = 'normal'
   // Default workspace-enrollment fields to "no assignment" so the
   // legacy tenantless flow keeps working. Operators opt in by picking
   // a workspace from the dropdown; the role defaults to contributor,
@@ -1744,6 +1840,11 @@ async function submitCreate() {
     email: createForm.email.trim().toLowerCase(),
     password: createForm.password,
     is_active: createForm.isActive,
+    // Platform-level role. Always send (matches the form's radio state)
+    // so the wire shape mirrors the operator's intent regardless of the
+    // selected default. Server validates oneof('normal', 'admin') and
+    // falls back to 'normal' on a bad value.
+    user_role: createForm.userRole,
   }
   if (createForm.tenantId !== undefined && createForm.tenantId !== null) {
     payload.tenant_id = createForm.tenantId
@@ -2030,6 +2131,13 @@ async function submitDelete() {
   padding: 8px 12px;
   background: var(--td-bg-color-secondary-container, #f5f5f5);
   border-radius: 4px;
+}
+
+.um-edit-hint {
+  color: var(--td-text-color-secondary, #888);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 4px 0 0;
 }
 
 .um-create-hint {

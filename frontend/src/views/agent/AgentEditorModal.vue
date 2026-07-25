@@ -747,7 +747,7 @@
                           </t-option>
                         </t-select>
                         <a href="javascript:void(0)" class="go-settings-link"
-                          @click.prevent="uiStore.openSettings('storage')">
+                          @click.prevent="handleGoToStorageSettings">
                           {{ $t('agentEditor.imageUpload.goStorageSettings') }}
                         </a>
                       </div>
@@ -1594,6 +1594,7 @@ import { type WebSearchProviderEntity } from '@/api/web-search-provider';
 import { type StorageEngineStatusItem, type PromptTemplate, type PromptTemplatesConfig } from '@/api/system';
 import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
+import { safeOpenSettings } from '@/utils/safeOpenSettings';
 import { useOrganizationStore } from '@/stores/organization';
 import { useChatResourcesStore } from '@/stores/chatResources';
 import { useEditorResourcesStore } from '@/stores/editorResources';
@@ -2410,9 +2411,27 @@ async function loadAgentIntegrationCounts(agentId: string) {
 function gotoIntegrations(tab: 'im' | 'embed') {
   const agentId = editorAgent.value?.id;
   if (!agentId) return;
+  // User-level gate: normal-role users are forbidden from any Settings
+  // entry; safeOpenSettings routes them back out (with a toast) instead
+  // of letting them reach the integrations tab. We carry the agentId /
+  // tab query through so the integrations tab picks the right channel.
+  if (!safeOpenSettings(router, 'integrations')) return;
   handleClose();
-  router.push({ path: '/platform/settings', query: { section: 'integrations', agentId, tab } });
+  // Preserve the historical deep-link: Settings.vue reads
+  // route.query.agentId / tab to scope the integrations tab to a given
+  // agent (see integrationsView state). Re-push with the extra query.
+  router.replace({
+    path: '/platform/settings',
+    query: { section: 'integrations', agentId, tab },
+  });
 }
+
+// 跳转到存储设置：包装 uiStore.openSettings('storage') 以加入 user-level gate。
+// inline @click.prevent handler 使用同一个 safeOpenSettings 路径，避免单点实现
+// 出现策略漂移。
+const handleGoToStorageSettings = () => {
+  safeOpenSettings(router, 'storage');
+};
 
 const filteredIntentPlaceholders = computed(() => {
   if (!intentPromptPopup.value.prefix) {
@@ -3257,7 +3276,10 @@ const handleAddModel = (subSection: string) => {
     MessagePlugin.warning(t('common.noPermission'));
     return;
   }
-  uiStore.openSettings('models', subSection);
+  // User-level gate: normal-role users can't enter the models section
+  // at all, so this "add model" CTA must also bounce via the shared
+  // safeOpenSettings gate (same rules as the 25 inventory entry points).
+  if (!safeOpenSettings(router, 'models', subSection)) return;
 };
 
 const handleClose = () => {

@@ -55,6 +55,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { type StorageEngineStatusItem } from '@/api/system'
 import { useUIStore } from '@/stores/ui'
+import { safeOpenSettings } from '@/utils/safeOpenSettings'
 import { useEditorResourcesStore } from '@/stores/editorResources'
 
 const { t } = useI18n()
@@ -174,8 +175,12 @@ function ensureAllowedProvider() {
 }
 
 function goToStorageSettings() {
+  // user-level gate first (so normal-role users get the toast), then
+  // close the host KB editor and open the Settings drawer. We pass
+  // router=undefined to safeOpenSettings because the KB editor modal is
+  // already anchoring the route — only uiStore.openSettings matters here.
+  if (!safeOpenSettings(undefined, 'storage')) return
   uiStore.closeKBEditor?.()
-  uiStore.openSettings?.('storage')
 }
 
 async function load(force = false) {

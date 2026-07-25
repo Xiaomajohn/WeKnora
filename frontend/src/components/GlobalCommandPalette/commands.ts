@@ -1,6 +1,7 @@
 import type { Router } from 'vue-router'
 import type { Composer } from 'vue-i18n'
 import { openNewUserGuide } from '@/config/contextualGuides'
+import { useAuthStore } from '@/stores/auth'
 
 /**
  * A single command that can be searched and invoked from the palette.
@@ -15,6 +16,12 @@ export interface CmdkCommand {
   icon: string
   /** Extra tokens used purely for fuzzy matching (aliases, synonyms). */
   keywords?: string[]
+  /**
+   * Optional visibility gate. Commands are filtered out at build time
+   * (this function is called each time the palette opens with a fresh
+   * auth state) — see buildCommands.
+   */
+  visible?: () => boolean
   /** Executed on primary action. Should close the palette itself if needed. */
   run: () => void
 }
@@ -32,7 +39,8 @@ export interface CommandContext {
  */
 export function buildCommands(ctx: CommandContext): CmdkCommand[] {
   const { router, t, close } = ctx
-  return [
+  const authStore = useAuthStore()
+  const all: CmdkCommand[] = [
     {
       id: 'new-chat',
       label: t('commandPalette.quick.newChat'),
@@ -78,6 +86,11 @@ export function buildCommands(ctx: CommandContext): CmdkCommand[] {
       label: t('commandPalette.quick.settings'),
       icon: 'setting',
       keywords: ['settings', 'preferences', 'config', '设置', '配置'],
+      // User-level gate: hide the open-settings command from normal-role
+      // accounts so ⌘K "settings" search doesn't reveal an entry that
+      // would just bounce off the route beforeEach. Read fresh here
+      // because the palette is rebuilt whenever it opens.
+      visible: () => authStore.isAllowedToEnterSettings,
       run: () => {
         close()
         router.push('/platform/settings')
@@ -94,6 +107,7 @@ export function buildCommands(ctx: CommandContext): CmdkCommand[] {
       },
     },
   ]
+  return all.filter((cmd) => (cmd.visible ? cmd.visible() : true))
 }
 
 /**

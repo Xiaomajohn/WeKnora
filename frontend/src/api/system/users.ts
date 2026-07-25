@@ -48,6 +48,14 @@ export interface UserInfo {
   avatar?: string
   is_active: boolean
   is_system_admin: boolean
+  /**
+   * Platform-level user role that controls whether the SPA exposes
+   * any Settings entry point. Orthogonal to per-tenant TenantRole
+   * (owner/admin/contributor/viewer) and to IsSystemAdmin. Only
+   * SystemAdmin can write this field; a server-validated oneof
+   * ('normal' | 'admin') on the handler side.
+   */
+  user_role: 'normal' | 'admin'
   created_at: string
   updated_at: string
 }
@@ -164,6 +172,13 @@ export interface UpdateUserRequest {
   username?: string
   email?: string
   is_active?: boolean
+  /**
+   * User-level role. Backend rejects writes to this field when the
+   * target user has is_system_admin=true (user_role is governed by
+   * the system-admin lifecycle, not this dialog). Server validates
+   * the value is one of 'normal' | 'admin'.
+   */
+  user_role?: 'normal' | 'admin'
 }
 
 /**
@@ -231,6 +246,14 @@ export interface CreateUserRequest {
   password: string
   /** Defaults to true on the server when omitted. */
   is_active?: boolean
+  /**
+   * Platform-level user role (normal | admin). When omitted the
+   * server default is 'normal' so the freshly-created account can't
+   * see the Settings page; pass 'admin' to grant a non-sysadmin
+   * platform operator the ability to manage tenants via the UI.
+   * Server validates the value is one of 'normal' | 'admin'.
+   */
+  user_role?: 'normal' | 'admin'
   /**
    * Optional workspace to enroll the new user into. When supplied,
    * `tenant_role` must also be supplied; both are ignored otherwise.

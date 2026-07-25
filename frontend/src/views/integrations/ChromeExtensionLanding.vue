@@ -95,6 +95,7 @@ import { useRouter } from 'vue-router'
 import { CHROME_EXTENSION_URL } from '@/config/integrations'
 import { useApiBaseUrlDisplay } from '@/composables/useApiBaseUrlDisplay'
 import { useUIStore } from '@/stores/ui'
+import { safeOpenSettings } from '@/utils/safeOpenSettings'
 import IntegrationLandingLayout from './IntegrationLandingLayout.vue'
 import IntegrationExternalCta from './IntegrationExternalCta.vue'
 
@@ -119,8 +120,18 @@ const openChromeStore = () => {
 }
 
 const openApiSettings = () => {
-  router.push({ path: '/platform/settings', query: { section: 'integrations', tab: 'api' } })
-  uiStore.openSettings('integration-api')
+  // user-level gate: normal-role users don't have access to the
+  // integrations / API section. safeOpenSettings routes them through
+  // the gate (and pops a toast) instead of letting them reach the
+  // section via the URL push below.
+  if (!safeOpenSettings(router, 'integration-api')) return
+  // safeOpenSettings already pushed /platform/settings; reinforce the
+  // integrations tab via replace so the deep-link query sticks even if
+  // the user navigated away mid-click.
+  router.replace({
+    path: '/platform/settings',
+    query: { section: 'integrations', tab: 'api' },
+  })
 }
 
 const copyApiUrl = async () => {
