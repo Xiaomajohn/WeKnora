@@ -2055,6 +2055,7 @@ export default {
       copyFailed: "复制失败",
       disabled: "已停用",
       enabled: "已启用",
+      noEditPermission: "只有跨空间管理员才能编辑或删除智能体",
     },
     editor: {
       createTitle: "创建智能体",

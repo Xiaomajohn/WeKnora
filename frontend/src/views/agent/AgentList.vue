@@ -1242,6 +1242,14 @@ const handleCardClick = (agent: DisplayAgent | AgentWithUI) => {
     if (shared) openSharedAgentDetail(shared)
     return
   }
+  // Direct-card click would otherwise fall through into handleEdit and
+  // open the editor in readOnly mode. Mirror the server-side
+  // RequireAgentEditAuthority contract up front: non-cross-tenant-
+  // superusers get a permission toast instead of an editor pane.
+  if (!canManageAgent(agent as AgentWithUI)) {
+    MessagePlugin.warning(t('agent.messages.noEditPermission'))
+    return
+  }
   handleEdit(agent as AgentWithUI)
 }
 

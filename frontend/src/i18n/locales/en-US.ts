@@ -1018,6 +1018,7 @@ export default {
       copyFailed: 'Copy failed',
       disabled: 'Agent disabled',
       enabled: 'Agent enabled',
+      noEditPermission: 'Only cross-workspace administrators can edit or delete agents',
     },
     editor: {
       createTitle: 'Create Agent',
