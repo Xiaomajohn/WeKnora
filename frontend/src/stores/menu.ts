@@ -10,6 +10,14 @@ interface MenuItem {
   titleKey?: string
   icon: string
   path: string
+  // requiresUserLevelAdmin tags the sidebar "Settings" entry (and any
+  // future user-level-gated item) so the visibleMenuArr computed can
+  // drop it for normal-role accounts. The same role predicate
+  // (authStore.isAllowedToEnterSettings) backs every consumer of this
+  // flag, so toggling it on a new item is a one-line change. The route-
+  // level meta flag on /platform/settings is the strong protection; the
+  // sidebar flag just keeps the icon from being a dead-end click.
+  requiresUserLevelAdmin?: boolean
   childrenPath?: string
   children?: MenuChild[]
 }
@@ -29,7 +37,17 @@ export const useMenuStore = defineStore('menuStore', () => {
     { title: '', titleKey: 'menu.knowledgeBase', icon: 'zhishiku', path: 'knowledge-bases' },
     { title: '', titleKey: 'menu.agents', icon: 'agent', path: 'agents' },
     { title: '', titleKey: 'menu.organizations', icon: 'organization', path: 'organizations' },
-    { title: '', titleKey: 'menu.settings', icon: 'setting', path: 'settings' },
+    {
+      title: '',
+      titleKey: 'menu.settings',
+      icon: 'setting',
+      path: 'settings',
+      // Tag the sidebar "Settings" entry as user-level-admin gated so
+      // normal-role accounts never see the icon. The underlying route
+      // also carries a meta.requiresUserLevelAdmin flag (see router/
+      // index.ts) for the URL-level protection.
+      requiresUserLevelAdmin: true
+    },
     { title: '', titleKey: 'menu.logout', icon: 'logout', path: 'logout' }
   ])
 
@@ -70,6 +88,13 @@ export const useMenuStore = defineStore('menuStore', () => {
         return false
       }
       if (item.path === 'organizations' && !authStore.hasRole('admin')) {
+        return false
+      }
+      // User-level gate: drop any item flagged as requiring a
+      // user-level admin (currently the "Settings" sidebar entry). The
+      // route guard is the strong protection; this just keeps the icon
+      // from being a dead-end click for normal-role accounts.
+      if (item.requiresUserLevelAdmin && !authStore.isAllowedToEnterSettings) {
         return false
       }
       return true

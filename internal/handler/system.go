@@ -1515,6 +1515,11 @@ type UpdateUserRequest struct {
 	Username *string `json:"username,omitempty"`
 	Email    *string `json:"email,omitempty"`
 	IsActive *bool   `json:"is_active,omitempty"`
+	// UserRole toggles between 'normal' and 'admin'. Refused with 400
+	// when the target user IsSystemAdmin=true (the system-admin column is
+	// authoritative for that class of account and is never reachable
+	// through this endpoint).
+	UserRole *string `json:"user_role,omitempty" binding:"omitempty,oneof=normal admin"`
 }
 
 // loadMembershipsForUser reads every active membership for userID and
@@ -1761,7 +1766,7 @@ func (h *SystemHandler) UpdateUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
 		return
 	}
-	if req.Username == nil && req.Email == nil && req.IsActive == nil {
+	if req.Username == nil && req.Email == nil && req.IsActive == nil && req.UserRole == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No fields to update"})
 		return
 	}
@@ -1823,6 +1828,26 @@ func (h *SystemHandler) UpdateUser(c *gin.Context) {
 			}
 			changes["is_active"] = map[string]any{"from": user.IsActive, "to": newActive}
 			user.IsActive = newActive
+		}
+	}
+	// UserRole: toggling the platform-level role that decides whether the
+	// SPA exposes any Settings entry point. The IsSystemAdmin column is
+	// authoritative for that class of account, so the user_role column is
+	// intentionally read-only on system-admin accounts: refuse the request
+	// here instead of silently storing an arbitrary value, so an operator
+	// mistake (e.g. flipping the only super-admin to 'normal') leaves the
+	// IsSystemAdmin flag and the database column unchanged.
+	if req.UserRole != nil {
+		if user.IsSystemAdmin {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "Cannot modify user_role of a system administrator; user_role is controlled by the system-admin lifecycle",
+			})
+			return
+		}
+		newRole := strings.TrimSpace(*req.UserRole)
+		if newRole != user.UserRole {
+			changes["user_role"] = map[string]any{"from": user.UserRole, "to": newRole}
+			user.UserRole = newRole
 		}
 	}
 
@@ -2556,6 +2581,13 @@ type CreateUserRequest struct {
 	IsActive   *bool             `json:"is_active,omitempty"`
 	TenantID   *uint64           `json:"tenant_id,omitempty"`
 	TenantRole *types.TenantRole `json:"tenant_role,omitempty"`
+	// UserRole is a platform-level role that controls whether the SPA
+	// exposes any Settings entry point. Only 'normal' (default) and
+	// 'admin' (delegate platform admin without full sysadmin powers) are
+	// accepted. IsSystemAdmin users are created with system privileges and
+	// must keep UserRole='normal'; the bootstrap system admin promotion
+	// path skips this gate.
+	UserRole *string `json:"user_role,omitempty" binding:"omitempty,oneof=normal admin"`
 }
 
 // CreateUser godoc
@@ -2648,6 +2680,13 @@ func (h *SystemHandler) CreateUser(c *gin.Context) {
 		PasswordHash: string(hash),
 		IsActive:     isActive,
 	}
+	// userService.CreateUser validates and defaults the role (it always
+	// falls back to 'normal' when empty), so we just forward the caller's
+	// explicit choice. IsSystemAdmin creation goes through a separate
+	// path (PromoteUserToSystemAdmin) and is unaffected.
+	if req.UserRole != nil && *req.UserRole != "" {
+		newUser.UserRole = *req.UserRole
+	}
 
 	if err := h.userSvc.CreateUser(ctx, newUser); err != nil {
 		msg := err.Error()
@@ -2665,6 +2704,7 @@ func (h *SystemHandler) CreateUser(c *gin.Context) {
 		"target_email":    newUser.Email,
 		"target_username": newUser.Username,
 		"password_set":    true,
+		"user_role":       newUser.UserRole,
 	}
 
 	// Optional same-trip enrollment into a workspace. The SystemAdmin
@@ -2795,27 +2835,17 @@ func (h *SystemHandler) DeleteUser(c *gin.Context) {
 		return
 	}
 	if target.IsSystemAdmin {
-		// Count remaining active system admins. If this is the only
-		// one (other than the caller, who is already excluded), refuse.
-		// We use ListSystemAdmins(_, 0, 1000) — the list is small in
-		// practice, and the offset/limit default of the underlying repo
-		// is well-bounded.
-		admins, _, lerr := h.userSvc.ListSystemAdmins(ctx, 0, 1000)
-		if lerr != nil {
-			logger.Errorf(ctx, "ListSystemAdmins failed during delete-last-admin guard: %v", lerr)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify last-admin guard"})
-			return
-		}
-		remaining := 0
-		for _, a := range admins {
-			if a != nil && a.ID != target.ID && a.IsActive {
-				remaining++
-			}
-		}
-		if remaining == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot delete the last active system administrator"})
-			return
-		}
+		// SystemAdmin accounts are append-only: see project policy that a
+		// operator that loses access to an account should rotate the
+		// password or disable IsActive rather than delete the row, so a
+		// forgotten / leaked / unwanted system-admin account cannot be
+		// removed by another admin and there is always at least one
+		// recoverable bootstrap admin unless the operator explicitly
+		// demotes via /system/admin/users/{id}/revoke-system-admin.
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Cannot delete a system administrator; revoke the system-admin role first or disable the account via is_active",
+		})
+		return
 	}
 
 	// Snapshot memberships before deletion so the audit row records

@@ -97,13 +97,25 @@ const router = createRouter({
       children: [
         {
           path: "tenant",
-          redirect: "/platform/settings"
+          redirect: (to) => {
+            // Settings entry is gated by the user-level role (normal
+            // cannot see Settings). Bounce normal-role users to the KB
+            // list rather than to the settings redirect target below;
+            // the only behaviour change is that bookmarked /platform/
+            // tenant URLs land in a usable place instead of a 403/empty
+            // section key. The Server-style /tenants/sections DOM
+            // resolve is not relevant here — we don't want to issue any
+            // request for non-admins.
+            return useAuthStore().isAllowedToEnterSettings
+              ? "/platform/settings"
+              : { path: "/platform/knowledge-bases" }
+          }
         },
         {
           path: "settings",
           name: "settings",
           component: () => import("../views/settings/Settings.vue"),
-          meta: { requiresInit: true, requiresAuth: true }
+          meta: { requiresInit: true, requiresAuth: true, requiresUserLevelAdmin: true }
         },
         {
           path: "knowledge-bases",
@@ -136,13 +148,23 @@ const router = createRouter({
         },
         {
           path: "integrations",
-          redirect: (to) => ({
-            path: "/platform/settings",
-            query: {
-              ...to.query,
-              section: "integrations",
-            },
-          }),
+          redirect: (to) => {
+            // Same gate as /platform/tenant: only user-level admins land
+            // in the integrations section; everyone else bounces to the
+            // KB list (per-tenant Owner onboarding shortcut is preserved
+            // through the integration list in the KB / Agent contexts —
+            // it does not live behind the Settings page).
+            if (!useAuthStore().isAllowedToEnterSettings) {
+              return { path: "/platform/knowledge-bases" }
+            }
+            return {
+              path: "/platform/settings",
+              query: {
+                ...to.query,
+                section: "integrations",
+              },
+            }
+          },
           meta: { requiresInit: true, requiresAuth: true }
         },
         {
@@ -389,6 +411,30 @@ router.beforeEach(async (to, from, next) => {
   // the bounce. This is UI-only; the server enforces the real check.
   if (to.meta.requiresSystemAdmin === true) {
     if (!authStore.isSystemAdmin) {
+      next('/platform/knowledge-bases')
+      return
+    }
+  }
+
+  // User-level role gate — the lightest settings entry gate, applied
+  // via meta.requiresUserLevelAdmin. We bounce normal-role accounts
+  // before they can render Settings.vue (the route-level `<Settings />`
+  // in views/platform/index.vue always renders the modal wrapper).
+  // System administrators and platform-level admins bypass this.
+  // Drops a toast so the user understands why the URL bounced.
+  if (to.meta.requiresUserLevelAdmin === true) {
+    if (!authStore.isAllowedToEnterSettings) {
+      // Lazy import to avoid pulling i18n into the initial bundle
+      // path; the gate is only invoked on bad navigation.
+      try {
+        const { default: i18n } = await import('@/i18n')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const t: any = (i18n.global as any).t
+        const { MessagePlugin } = await import('tdesign-vue-next')
+        MessagePlugin.warning(t('settingsVisibility.userLevelRestricted.title'))
+      } catch {
+        /* i18n or MessagePlugin missing on hard refresh — silently bounce */
+      }
       next('/platform/knowledge-bases')
       return
     }

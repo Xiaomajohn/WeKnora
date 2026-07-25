@@ -86,6 +86,8 @@ import { ref } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useUIStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
+import { useRouter } from 'vue-router'
+import { safeOpenSettings } from '@/utils/safeOpenSettings'
 import ModelSelector from '@/components/ModelSelector.vue'
 import { useI18n } from 'vue-i18n'
 
@@ -112,6 +114,7 @@ const emit = defineEmits<{
 
 const uiStore = useUIStore()
 const authStore = useAuthStore()
+const router = useRouter()
 const { t } = useI18n()
 
 const llmSelectorRef = ref<InstanceType<typeof ModelSelector>>()
@@ -145,7 +148,10 @@ const handleAddModel = (subSection: string) => {
     MessagePlugin.warning(t('common.noPermission'))
     return
   }
-  uiStore.openSettings('models', subSection)
+  // User-level gate: same as the 25-inventory entry points; normal-role
+  // users must not be routed into any Settings subsection via "add model"
+  // CTAs inside KB config panels either.
+  if (!safeOpenSettings(router, 'models', subSection)) return
 }
 </script>
 

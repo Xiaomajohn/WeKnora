@@ -12,6 +12,7 @@ import {
   markContextualGuideDone,
 } from '@/config/contextualGuides'
 import { useUIStore } from '@/stores/ui'
+import { safeOpenSettings } from '@/utils/safeOpenSettings'
 import type { SpotlightGuideStep } from '@/types/spotlightGuide'
 
 const props = withDefaults(
@@ -40,8 +41,14 @@ const steps: SpotlightGuideStep[] = [
     target: '[data-guide="settings-add-model"], [data-guide="settings-models"]',
     placement: 'left',
     before: () => {
-      uiStore.openSettings('models')
-      settingsOpenedByGuide = true
+      // user-level gate: contextual guides shouldn't even trigger for
+      // normal-role accounts, but defensively route through safeOpenSettings
+      // so the same gate applies if guide state ever races with a role
+      // downgrade. Note: we mark settingsOpenedByGuide only on success so
+      // closeGuideSettings doesn't try to close a drawer we never opened.
+      if (safeOpenSettings(undefined, 'models')) {
+        settingsOpenedByGuide = true
+      }
     },
   },
   { key: 'done' },

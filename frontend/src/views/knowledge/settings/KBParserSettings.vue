@@ -89,6 +89,7 @@ import { useI18n } from 'vue-i18n'
 import { type ParserEngineInfo } from '@/api/system'
 import { useEditorResourcesStore } from '@/stores/editorResources'
 import { useUIStore } from '@/stores/ui'
+import { safeOpenSettings } from '@/utils/safeOpenSettings'
 import { storeToRefs } from 'pinia'
 
 const { t } = useI18n()
@@ -266,7 +267,10 @@ function buildCompleteRules(): ParserEngineRule[] {
 }
 
 function goToParserSettings() {
-  uiStore.openSettings('parser')
+  // Embedded in KB editor modal — no router push (keep KB editor
+  // mounted). user-level gate: normal-role users get a toast and the
+  // drawer won't silently fail to render.
+  safeOpenSettings(undefined, 'parser')
 }
 
 async function loadEngines(force = false) {

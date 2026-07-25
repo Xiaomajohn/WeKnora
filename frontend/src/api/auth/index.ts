@@ -122,6 +122,13 @@ export interface UserInfo {
   // settings entries (members / models / "all settings") for these
   // accounts. Not propagated to API calls.
   registered_via_invite?: boolean
+  // Platform-level user role controlling whether the SPA exposes any
+  // Settings entry point. 'admin' grants delegated platform-admin
+  // powers (the “All settings” + “Settings” menu), 'normal' hides every
+  // settings entry point. IsSystemAdmin / canAccessAllTenants always
+  // bypass this gate. Backend validates against this whitelist; see
+  // SystemHandler.CreateUser / UpdateUser.
+  user_role?: 'normal' | 'admin'
   created_at: string
   updated_at: string
 }
@@ -164,6 +171,14 @@ export function userInfoFromApi(
     // Strict === true mirrors the is_system_admin / can_access_all_tenants
     // treatment above — see comment block on the factory.
     registered_via_invite: u?.registered_via_invite === true,
+    // user_role fallback: legacy tokens / cached localStorage payloads
+    // predate the column and store undefined; default to 'normal' so
+    // existing accounts lose settings access (matches backend default +
+    // safe-by-default behaviour). New users don't carry this race
+    // because the column is NOT NULL on the DB side and the factory is
+    // the single source of truth when /auth/login returns a hydrated
+    // user.
+    user_role: u?.user_role === 'admin' ? 'admin' : 'normal',
     preferences: u?.preferences,
     created_at: u?.created_at || new Date().toISOString(),
     updated_at: u?.updated_at || new Date().toISOString(),

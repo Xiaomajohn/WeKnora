@@ -110,6 +110,7 @@ import { useRouter } from 'vue-router'
 import { CLAWHUB_SKILL_URL } from '@/config/integrations'
 import { useApiBaseUrlDisplay } from '@/composables/useApiBaseUrlDisplay'
 import { useUIStore } from '@/stores/ui'
+import { safeOpenSettings } from '@/utils/safeOpenSettings'
 import IntegrationLandingLayout from './IntegrationLandingLayout.vue'
 import IntegrationExternalCta from './IntegrationExternalCta.vue'
 
@@ -141,8 +142,14 @@ const openClawHub = () => {
 }
 
 const openApiSettings = () => {
-  router.push({ path: '/platform/settings', query: { section: 'integrations', tab: 'api' } })
-  uiStore.openSettings('integration-api')
+  // user-level gate: same rules as ChromeExtensionLanding and the 25
+  // inventory entry points. safeOpenSettings handles the toast and the
+  // initial push; replace carries the integrations tab deep-link.
+  if (!safeOpenSettings(router, 'integration-api')) return
+  router.replace({
+    path: '/platform/settings',
+    query: { section: 'integrations', tab: 'api' },
+  })
 }
 
 const copyText = async (text: string, successKey: string) => {

@@ -406,6 +406,7 @@ import {
 } from '@/api/model'
 import { useI18n } from 'vue-i18n'
 import { useUIStore } from '@/stores/ui'
+import { safeOpenSettings } from '@/utils/safeOpenSettings'
 import {
   defaultThinkingControl,
   resolveThinkingControl,
@@ -826,7 +827,12 @@ const goToWeKnoraCloudSettings = async () => {
     uiStore.closeSettings()
     await nextTick()
   }
-  uiStore.openSettings('weknoracloud')
+  // user-level gate: same rules as the 25 inventory entry points.
+  // safeOpenSettings returns false (and pops a toast) for normal-role
+  // users — at which point we've already emitted close, so the editor
+  // closes cleanly without opening anything. The early-return pattern is
+  // intentional: don't try to "un-close" the editor if the gate fails.
+  safeOpenSettings(undefined, 'weknoracloud')
 }
 
 const formData = ref<ModelFormData>({
@@ -955,10 +961,12 @@ const goToOllamaSettings = async () => {
     await nextTick()
   }
 
-  // 打开设置窗口并直接跳转到Ollama设置
-  console.log('调用uiStore.openSettings')
-  uiStore.openSettings('ollama')
-  console.log('uiStore.openSettings调用完成')
+  // user-level gate: same rules as the 25 inventory entry points.
+  // safeOpenSettings returns false (and pops a toast) for normal-role
+  // users — at which point the editor has already closed cleanly.
+  console.log('调用 safeOpenSettings')
+  safeOpenSettings(undefined, 'ollama')
+  console.log('safeOpenSettings 调用完成')
 }
 
 // 上一次打开时的 modelData id：用来判断切换模型/新增 vs. 同一次新增的连续打开

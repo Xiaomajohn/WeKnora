@@ -138,6 +138,33 @@ export const useAuthStore = defineStore('auth', () => {
     return user.value?.registered_via_invite === true
   })
 
+  // userLevelRole is the platform-level user role resolved from the
+  // user_role column on the server. It's orthogonal to per-tenant
+  // TenantRole (owner/admin/contributor/viewer) and only controls
+  // whether the SPA exposes ANY settings entry point. IsSystemAdmin and
+  // canAccessAllTenants always win; user_role only ever demotes a
+  // normal user.
+  //
+  // Resolves to 'system_admin' / 'admin' / 'normal'. The Settings /
+  // UserMenu / GlobalCommandPalette / Settings.vue gates all share
+  // isAllowedToEnterSettings below to stay consistent.
+  const userLevelRole = computed<'system_admin' | 'admin' | 'normal'>(() => {
+    if (isSystemAdmin.value) return 'system_admin'
+    if (user.value?.user_role === 'admin') return 'admin'
+    return 'normal'
+  })
+
+  // isAllowedToEnterSettings is the single SPA-wide predicate that
+  // backs every settings-entry gate. Encapsulates the rule
+  // "system_admin / admin may enter; normal may not" so adding a future
+  // escalation (e.g. another role) only requires editing this one
+  // computed.
+  //
+  // SECURITY: shares the same UI-only caveat as registeredViaInvite /
+  // isSystemAdmin / currentTenantRole — every protected call already
+  // lives behind server-side enforcement, so this is purely a UX gate.
+  const isAllowedToEnterSettings = computed(() => userLevelRole.value !== 'normal')
+
   // currentTenantRole returns the user's role in the active tenant
   // (defaulting to '' when memberships have not been loaded). Used by
   // role-aware UI gating; PR 2 wires backend enforcement, PR 3 uses
@@ -565,6 +592,8 @@ export const useAuthStore = defineStore('auth', () => {
     registeredViaInvite,
     currentTenantRole,
     hasRole,
+    userLevelRole,
+    isAllowedToEnterSettings,
     effectiveTenantId,
     isLiteMode,
 

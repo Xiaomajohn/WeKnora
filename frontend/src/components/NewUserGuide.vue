@@ -8,6 +8,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import SpotlightGuide from '@/components/SpotlightGuide.vue'
 import { GLOBAL_USER_GUIDE_KEY, OPEN_NEW_USER_GUIDE_EVENT } from '@/config/contextualGuides'
 import { useUIStore } from '@/stores/ui'
+import { safeOpenSettings } from '@/utils/safeOpenSettings'
 import type { SpotlightGuideStep } from '@/types/spotlightGuide'
 
 const uiStore = useUIStore()
@@ -45,8 +46,15 @@ const steps = computed<SpotlightGuideStep[]>(() => [
     target: '[data-guide="settings-add-model"], [data-guide="settings-models"]',
     placement: 'left',
     before: () => {
-      uiStore.openSettings('models')
-      settingsOpenedByGuide = true
+      // user-level gate: the new-user guide itself shouldn't trigger
+      // for normal-role accounts (the surrounding guard in App.vue /
+      // openNewUserGuide filters this), but defensively route through
+      // safeOpenSettings. Only mark settingsOpenedByGuide on success
+      // so closeGuideSettings doesn't try to close a drawer we never
+      // opened.
+      if (safeOpenSettings(undefined, 'models')) {
+        settingsOpenedByGuide = true
+      }
     },
   },
   { key: 'done' },

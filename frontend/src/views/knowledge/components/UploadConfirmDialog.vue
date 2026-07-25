@@ -261,6 +261,7 @@ import KBAdvancedSettings from '../settings/KBAdvancedSettings.vue'
 import GraphSettings from '../settings/GraphSettings.vue'
 import { useChatResourcesStore } from '@/stores/chatResources'
 import { useUIStore } from '@/stores/ui'
+import { safeOpenSettings } from '@/utils/safeOpenSettings'
 import { formatFileSize, getFileIcon } from '@/utils/files'
 import { getUploadFileKey } from '../utils/uploadSources'
 import KbUploadSourceDropdown from './KbUploadSourceDropdown.vue'
@@ -892,11 +893,15 @@ const handleMultimodalVLLMChange = (modelId: string) => {
 }
 
 const handleAddVLLMModel = () => {
-  uiStore.openSettings('models', 'vllm')
+  // Embedded in upload-confirm dialog — no router push. user-level
+  // gate: same rules as the 25 inventory entry points; normal-role
+  // users get a toast and the settings drawer won't silently fail to
+  // render on top of the upload modal.
+  safeOpenSettings(undefined, 'models', 'vllm')
 }
 
 const handleAddASRModel = () => {
-  uiStore.openSettings('models', 'asr')
+  safeOpenSettings(undefined, 'models', 'asr')
 }
 
 const handleQuestionGenerationUpdate = (config: { enabled: boolean; questionCount: number }) => {

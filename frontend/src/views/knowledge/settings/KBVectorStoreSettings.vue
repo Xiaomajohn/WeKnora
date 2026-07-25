@@ -95,6 +95,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useUIStore } from '@/stores/ui'
+import { safeOpenSettings } from '@/utils/safeOpenSettings'
 import { listVectorStores, type VectorStoreEntity } from '@/api/vector-store'
 import type { VectorStoreSource, VectorStoreStatus } from '@/api/knowledge-base'
 import VectorStoreBadge from '@/components/VectorStoreBadge.vue'
@@ -157,7 +158,11 @@ const handleChange = (val: string | undefined) => {
 // modal stays mounted and can be returned to once the user closes the
 // settings panel.
 const goToVectorStoreSettings = () => {
-  uiStore.openSettings('vectorstore')
+  // Embedded in KB editor modal — no router push; just unlock the
+  // Settings drawer (uiStore.openSettings). user-level gate still applies:
+  // a normal-role user clicking this link should get a toast and not have
+  // the drawer silently fail to render.
+  safeOpenSettings(undefined, 'vectorstore')
 }
 
 onMounted(async () => {

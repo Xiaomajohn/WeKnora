@@ -102,6 +102,16 @@ type User struct {
 	// models / "all settings") for these accounts while leaving
 	// self-service, OIDC, and Lite auto-setup users untouched.
 	RegisteredViaInvite bool `json:"registered_via_invite" gorm:"default:false;not null"`
+	// UserRole is a global, platform-level role orthogonal to per-tenant
+	// TenantRole (owner/admin/contributor/viewer). It gates whether the SPA
+	// exposes any Settings entry point. IsSystemAdmin and CanAccessAllTenants
+	// always bypass this gate. Valid values are 'normal' (default; no
+	// settings access) and 'admin' (delegate platform admin without full
+	// sysadmin powers). The CreateUser / UpdateUser handlers refuse to
+	// modify this column when the target user IsSystemAdmin=true; the
+	// DeleteUser handler refuses the delete outright for IsSystemAdmin=true
+	// targets.
+	UserRole string `json:"user_role" gorm:"type:varchar(20);not null;default:'normal';index"`
 	// Per-user UI/feature preferences (memory toggle, future knobs).
 	// Stored as JSON (jsonb on Postgres, TEXT on SQLite) via the
 	// driver.Valuer / sql.Scanner methods on UserPreferences.
@@ -257,10 +267,13 @@ type UserInfo struct {
 	// RegisteredViaInvite mirrors User.RegisteredViaInvite; see that field
 	// for semantics. Surfaced here so the SPA can gate privileged settings
 	// entries on invite-created accounts without needing a separate fetch.
-	RegisteredViaInvite bool            `json:"registered_via_invite"`
-	Preferences         UserPreferences `json:"preferences"`
-	CreatedAt           time.Time       `json:"created_at"`
-	UpdatedAt           time.Time       `json:"updated_at"`
+	RegisteredViaInvite bool `json:"registered_via_invite"`
+	// UserRole mirrors User.UserRole; see that field for semantics.
+	// Consumed by the SPA's settingsPageVisibility gate.
+	UserRole    string          `json:"user_role"`
+	Preferences UserPreferences `json:"preferences"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 // ToUserInfo converts User to UserInfo (without sensitive data)
@@ -275,6 +288,7 @@ func (u *User) ToUserInfo() *UserInfo {
 		CanAccessAllTenants: u.CanAccessAllTenants,
 		IsSystemAdmin:       u.IsSystemAdmin,
 		RegisteredViaInvite: u.RegisteredViaInvite,
+		UserRole:            u.UserRole,
 		Preferences:         u.Preferences,
 		CreatedAt:           u.CreatedAt,
 		UpdatedAt:           u.UpdatedAt,

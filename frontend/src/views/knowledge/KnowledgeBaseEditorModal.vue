@@ -455,6 +455,8 @@ import { useChatResourcesStore } from '@/stores/chatResources'
 import { useEditorResourcesStore } from '@/stores/editorResources'
 import { useUIStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
+import { useRouter } from 'vue-router'
+import { safeOpenSettings } from '@/utils/safeOpenSettings'
 import KBModelConfig from './settings/KBModelConfig.vue'
 import KBParserSettings from './settings/KBParserSettings.vue'
 import KBStorageSettings from './settings/KBStorageSettings.vue'
@@ -469,6 +471,7 @@ import { useI18n } from 'vue-i18n'
 
 const uiStore = useUIStore()
 const authStore = useAuthStore()
+const router = useRouter()
 const chatResources = useChatResourcesStore()
 const editorResources = useEditorResourcesStore()
 const { t } = useI18n()
@@ -1006,15 +1009,19 @@ const handleMultimodalVLLMChange = (modelId: string) => {
 }
 
 const handleAddVLLMModel = () => {
-  uiStore.openSettings('models', 'vllm')
+  // User-level gate: normal-role accounts must not be routed into any
+  // Settings subsection (even by a "add model" CTA inside the KB editor).
+  // safeOpenSettings handles the gate uniformly across the 25 inventory
+  // entry points; this file's 3 model-CTA handlers all funnel through it.
+  safeOpenSettings(router, 'models', 'vllm')
 }
 
 const handleAddASRModel = () => {
-  uiStore.openSettings('models', 'asr')
+  safeOpenSettings(router, 'models', 'asr')
 }
 
 const handleAddWikiModel = () => {
-  uiStore.openSettings('models', 'knowledgeqa')
+  safeOpenSettings(router, 'models', 'knowledgeqa')
 }
 
 const handleStorageProviderUpdate = (value: string) => {

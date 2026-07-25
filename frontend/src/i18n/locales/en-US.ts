@@ -4029,6 +4029,10 @@ export default {
             isActive: 'Account status',
             tenant: 'Workspace',
             tenantRole: 'Workspace role',
+            // Platform-level user role. Controls whether the new
+            // account can see Settings entry points. Distinct from
+            // tenantRole (per-workspace Owner/Admin/...).
+            userRole: 'Platform role'
           },
           usernamePlaceholder: '2-100 characters',
           emailPlaceholder: 'example{\'@\'}domain.com',
@@ -4037,6 +4041,8 @@ export default {
           tenantPlaceholder: '(Optional) No workspace / pick an existing one',
           tenantRolePlaceholder: '(Optional) Select a role',
           tenantHelp: 'Tip: leave both empty to keep the account “unassigned” — you can add them to a workspace later from the user detail panel. After picking a workspace, choose a role; role=Owner also pins this workspace as the user’s home workspace so they land directly inside it after login.',
+          userRolePlaceholder: 'Pick a platform role (“Normal user” or “User-level admin”)',
+          userRoleHelp: 'Only controls whether the user can enter the Settings page; it does not affect any per-workspace role.',
           submit: 'Create user',
           cancel: 'Cancel',
           success: 'User created — you can assign a workspace now',
@@ -4051,6 +4057,7 @@ export default {
             confirmRequired: 'Please re-enter the password',
             passwordMismatch: 'The two passwords do not match',
             tenantRoleRequired: 'Selecting a workspace also requires choosing a role',
+            userRoleInvalid: 'Please pick “Normal user” or “User-level admin”'
           },
         },
         deleteDialog: {
@@ -4097,7 +4104,11 @@ export default {
             username: 'Username',
             email: 'Email',
             isActive: 'Account status',
+            // Platform-level user role. Editing is disabled for system
+            // administrators (systemAdminLocked below is the hint).
+            userRole: 'Platform role'
           },
+          systemAdminLocked: 'System administrator platform role is locked',
           usernamePlaceholder: '2-32 characters',
           emailPlaceholder: 'example{\'@\'}domain.com',
           noChanges: 'Nothing to save',
@@ -4623,6 +4634,25 @@ export default {
     description: 'Configure language, appearance and other basic options',
     settings: 'Settings',
     close: 'Close Settings'
+  },
+  // Platform-level user role labels. Used by SystemAdmin surfaces
+  // (UserManagement createDialog / editDialog) and by the SPA-wide
+  // settingsVisibility gate. Two values: 'normal' (default; cannot
+  // enter Settings) and 'admin' (delegated platform admin; can).
+  // System administrators always use the platform-faithful label and
+  // are not surfaced through this enum.
+  userRoles: {
+    normal: 'Normal user',
+    admin: 'User-level admin'
+  },
+  // userLevelRestricted is the toast title / body shown when a
+  // normal-role user tries to enter Settings through any of the SPA's
+  // 29 entry points (URL, ⌘K, sidebar, UserMenu, context links).
+  settingsVisibility: {
+    userLevelRestricted: {
+      title: 'Insufficient permissions',
+      desc: 'Your account does not have access to the Settings page. Please contact a platform administrator.'
+    }
   },
   theme: {
     theme: 'Theme',

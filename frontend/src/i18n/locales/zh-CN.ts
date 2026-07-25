@@ -3034,6 +3034,10 @@ export default {
             isActive: "账号状态",
             tenant: "所属空间",
             tenantRole: "空间角色",
+            // Platform-level user role. Controls whether the new account
+            // can see Settings entry points. Distinct from tenantRole
+            // (per-workspace Owner/Admin/Contributor/Viewer).
+            userRole: "平台角色",
           },
           usernamePlaceholder: "2-100 个字符",
           emailPlaceholder: "example{'@'}domain.com",
@@ -3042,6 +3046,8 @@ export default {
           tenantPlaceholder: "（可选）不分配空间 / 选择已有空间",
           tenantRolePlaceholder: "（可选）请选择角色",
           tenantHelp: "提示：留空则账户进入\"未分配空间\"状态，可在用户详情里后续分配。选择空间后请指定角色，角色=所有者 会同时将该空间设为主空间，用户登录后直接进入。",
+          userRolePlaceholder: "请选择平台角色（“普通用户”或“用户级管理员”）",
+          userRoleHelp: "仅控制其能否进入设置页；不影响任何空间内的角色与权限。",
           submit: "创建用户",
           cancel: "取消",
           success: "用户已创建，现在可以为其分配空间",
@@ -3056,6 +3062,7 @@ export default {
             confirmRequired: "请再次输入密码",
             passwordMismatch: "两次输入的密码不一致",
             tenantRoleRequired: "选择空间后必须同时选择角色",
+            userRoleInvalid: "请选择“普通用户”或“用户级管理员”",
           },
         },
         deleteDialog: {
@@ -3102,7 +3109,13 @@ export default {
             username: "用户名",
             email: "邮箱",
             isActive: "账号状态",
+            // Platform-level user role. Editing disabled for system
+            // administrators (the IsSystemAdmin column is authoritative
+            // for that class of account; systemAdminLocked below is the
+            // accompanying hint).
+            userRole: "平台角色",
           },
+          systemAdminLocked: "系统管理员的平台角色不可修改",
           usernamePlaceholder: "2-32 个字符",
           emailPlaceholder: "example{'@'}domain.com",
           noChanges: "没有需要保存的修改",
@@ -3627,6 +3640,28 @@ export default {
     description: "配置语言、外观等基础选项",
     settings: "设置",
     close: "关闭设置",
+  },
+  // Platform-level user role labels. Used by SystemAdmin surfaces
+  // (UserManagement createDialog / editDialog) and by the SPA-wide
+  // settingsVisibility gate. Two values: 'normal' (default; cannot
+  // enter Settings) and 'admin' (delegated platform admin; can).
+  // System administrators always use the platform-faithful label and
+  // are not surfaced through this enum.
+  userRoles: {
+    normal: "普通用户",
+    admin: "用户级管理员",
+  },
+  // userLevelRestricted is the toast title / body shown when a
+  // normal-role user tries to enter Settings through any of the SPA's
+  // 29 entry points (URL, ⌘K, sidebar, UserMenu, context links). Keep
+  // here (top-level under settingsVisibility) so every gate can import
+  // the key with the same path without depending on which view owns
+  // the toast.
+  settingsVisibility: {
+    userLevelRestricted: {
+      title: "权限不足",
+      desc: "你的账号未获得访问设置页的权限，请联系平台管理员。",
+    },
   },
   theme: {
     theme: "主题模式",
