@@ -1313,18 +1313,22 @@ const handleEdit = (agent: AgentWithUI) => {
   editorVisible.value = true
 }
 
-// canManageAgent mirrors the server-side OwnedAgentOrAdmin guard
-// (PR 5 #1303): the agent's creator may always edit / delete; otherwise
-// Admin+ is required. Built-in agents have created_by="" → only Admin+
-// matches, which lines up with the "Admin can mutate tenant-owned
-// agents" rule. The server still enforces the same matrix on every
-// mutation; this gate just hides buttons the user has no authority
-// to use.
+// canManageAgent mirrors the server-side RequireAgentEditAuthority
+// guard: only cross-tenant superusers (User.CanAccessAllTenants while
+// cfg.Tenant.EnableCrossTenantAccess is on) may edit / delete an
+// agent. The previous "creator OR Admin+" matrix — still applied by
+// OwnedAgentOrAdmin for /agents/:id/shares — is deliberately dropped
+// here so the UI does not advertise edit/delete affordances to a
+// caller who would just receive a 403 from the server. Per-tenant
+// admin/owner/contributor/viewer roles no longer grant edit/delete;
+// Copy / ToggleDisabled / Share / Create remain on the original
+// floors and continue to surface their UI entries.
+//
+// Built-in agents (created_by="") also flow through this gate: they
+// are tenant-owned, so cross-tenant superusers edit them just like
+// any other agent, which lines up with the server-side decision.
 function canManageAgent(agent: AgentWithUI): boolean {
-  const userId = authStore.user?.id || ''
-  const creatorId = (agent as any).created_by || ''
-  if (creatorId && userId && creatorId === userId) return true
-  return authStore.hasRole('admin')
+  return authStore.canAccessAllTenants === true
 }
 
 // isMyAgent 仅用于卡片来源徽章在「我创建」与「同空间其他成员创建」之间切换。

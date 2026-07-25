@@ -1114,10 +1114,12 @@ func RegisterCustomAgentRoutes(r *gin.RouterGroup, agentHandler *handler.CustomA
 		agentsRead.GET("", g.Viewer(), agentHandler.ListAgents)
 		// Get agent by ID — Viewer+
 		agentsRead.GET("/:id", g.Viewer(), agentHandler.GetAgent)
-		// Update agent — creator OR Admin+
-		agentsWrite.PUT("/:id", g.OwnedAgentOrAdmin(), agentHandler.UpdateAgent)
-		// Delete agent — creator OR Admin+
-		agentsWrite.DELETE("/:id", g.OwnedAgentOrAdmin(), agentHandler.DeleteAgent)
+		// Update agent — only cross-tenant superusers (creator-or-admin
+		// is no longer sufficient; the product restricts agent editing
+		// to platform-level operators who can manage all workspaces).
+		agentsWrite.PUT("/:id", g.CrossTenantAgentEdit(), agentHandler.UpdateAgent)
+		// Delete agent — same matrix as PUT above.
+		agentsWrite.DELETE("/:id", g.CrossTenantAgentEdit(), agentHandler.DeleteAgent)
 		// Copy agent — Contributor+ (copy is owned by the caller)
 		agentsWrite.POST("/:id/copy", g.Contributor(), agentHandler.CopyAgent)
 	}

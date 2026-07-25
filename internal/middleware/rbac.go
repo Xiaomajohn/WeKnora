@@ -368,3 +368,66 @@ func warnOnNilConfig(cfg *config.Config) {
 				"almost certainly a wiring bug.", cfg)
 	})
 }
+
+// RequireAgentEditAuthority is the dedicated gatekeeper for agent
+// mutation routes (PUT/DELETE /agents/:id). The product rule is:
+// only cross-tenant superusers — callers with User.CanAccessAllTenants
+// while cfg.Tenant.EnableCrossTenantAccess is on — may edit or delete
+// agents. Per-tenant Owner/Admin/Contributor/Viewer ladders do NOT
+// grant this authority, even when the caller created the agent: the
+// creator-only fallback that OwnedAgentOrAdmin offers is deliberately
+// dropped here so that tenant-level administrators cannot quietly
+// reshape agents that other workspaces may already depend on.
+//
+// API-key principals are short-circuited entirely: their authority is
+// decided upstream by the APIKeyRouteAuthorizer's manage_agents
+// capability (see internal/router/rbac.go: apiKeyManageAgents). A
+// scoped integration key with manage_agents continues to mutate
+// agents; a key without it never reaches this middleware in the first
+// place because the gate's default-deny kicks in earlier.
+//
+// Like RequireCrossTenantAccess, this guard is NOT modulated by
+// cfg.Tenant.EnableRBAC: the cross-workspace edit restriction is a
+// separate axis from per-tenant RBAC, and never toggling it would let
+// a dormant EnableRBAC=false config silently allow edits that the
+// product considers sensitive.
+//
+// On rejection: writes a 1-minute-deduped audit row (action =
+// "cross_tenant_superuser", required role stringified into the
+// tenant_role column for queryability) and aborts with HTTP 403.
+func RequireAgentEditAuthority(cfg *config.Config) gin.HandlerFunc {
+	warnOnNilConfig(cfg)
+	return func(c *gin.Context) {
+		ctx := c.Request.Context()
+		// API-key principals are authorized solely by the APIKeyGate
+		// (manage_agents capability). The cross-workspace ownership
+		// matrix is a human concept; machine principals do not have a
+		// creator_id to match, so short-circuit here. The capability
+		// itself is what gates the route for API keys — see
+		// agentsWrite := agents.With(apiKeyManageAgents(apiKeyFullAccess()))
+		// in router.go.
+		if _, ok := types.TenantAPIKeyScopeFromContext(ctx); ok {
+			c.Next()
+			return
+		}
+		if IsCrossTenantSuperuser(ctx, cfg) {
+			c.Next()
+			return
+		}
+		uid, _ := types.UserIDFromContext(ctx)
+		logger.Warnf(ctx,
+			"[rbac] agent edit requires cross-tenant superuser: user=%s path=%s",
+			uid, c.Request.URL.Path)
+		// Durable audit row for the reject — same dedup contract as
+		// RequireRole / RequireSystemAdmin so an operator probing the
+		// endpoint doesn't fill the table with duplicates.
+		if svc := AuditServiceFromContext(c); svc != nil {
+			tenantID, _ := types.TenantIDFromContext(ctx)
+			_ = svc.LogDenied(ctx, c, tenantID, uid, "user", "cross_tenant_superuser")
+		}
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "Forbidden: only cross-workspace administrators may edit agents",
+		})
+		c.Abort()
+	}
+}

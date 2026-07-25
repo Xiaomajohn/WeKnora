@@ -456,6 +456,20 @@ func (g *rbacGuards) OwnedAgentOrAdmin() gin.HandlerFunc {
 	return middleware.RequireOwnershipOrRole(types.TenantRoleAdmin, g.agentCreator, g.cfg)
 }
 
+// CrossTenantAgentEdit wraps RequireAgentEditAuthority. Used for the
+// PUT /agents/:id and DELETE /agents/:id routes — the only agent
+// mutation routes whose product rule is "cross-tenant superuser only".
+// OwnedAgentOrAdmin is intentionally NOT replaced globally: the share
+// routes (/agents/:id/shares) and other admin-side endpoints still
+// need the original creator-or-admin matrix, which only this guard
+// provides. Adding the new guard here (instead of inlining the
+// middleware directly) keeps the route declarations declarative, so a
+// glance at the route line still tells the reader what authority is
+// required.
+func (g *rbacGuards) CrossTenantAgentEdit() gin.HandlerFunc {
+	return middleware.RequireAgentEditAuthority(g.cfg)
+}
+
 // OwnedKnowledgeKBOrAdmin: per-knowledge mutations (update / delete /
 // reparse / image edit) — the URL :id is a knowledge id, the lookup
 // walks it back to the owning KB's CreatorID. Same "creator OR Admin+"
