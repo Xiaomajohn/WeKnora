@@ -1,4 +1,4 @@
-const { saveSettings, getSettings } = require("../../utils/config");
+const { BRAND_API_LABEL, BRAND_NAME, saveSettings, getSettings } = require("../../utils/config");
 const { createKnowledgeFromURL, listKnowledgeBases } = require("../../utils/request");
 
 function normalizeKnowledgeBases(response) {
@@ -16,6 +16,8 @@ function normalizeKnowledgeBases(response) {
 
 Page({
   data: {
+    brandApiLabel: BRAND_API_LABEL,
+    brandName: BRAND_NAME,
     importing: false,
     knowledgeBases: [],
     knowledgeBaseNames: [],

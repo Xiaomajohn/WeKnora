@@ -1,9 +1,11 @@
-const { getSettings, saveSettings } = require("../../utils/config");
+const { BRAND_API_LABEL, BRAND_NAME, getSettings, saveSettings } = require("../../utils/config");
 
 Page({
   data: {
     baseUrl: "",
-    apiKey: ""
+    apiKey: "",
+    brandApiLabel: BRAND_API_LABEL,
+    brandName: BRAND_NAME
   },
 
   onShow() {

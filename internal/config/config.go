@@ -487,6 +487,63 @@ func ConfigDir() string {
 	return "./config"
 }
 
+// BrandName returns the short product name used in compact UI surfaces.
+func BrandName() string {
+	if value := strings.TrimSpace(os.Getenv("BRAND_NAME")); value != "" {
+		return value
+	}
+	return "WeKnora"
+}
+
+// BrandFullName returns the complete product name used in product-level text.
+// BRAND_FULL_NAME takes precedence over the legacy BRAND_NAME variable.
+func BrandFullName() string {
+	if value := strings.TrimSpace(os.Getenv("BRAND_FULL_NAME")); value != "" {
+		return value
+	}
+	return BrandName()
+}
+
+// BrandDescription returns the configurable product description for metadata and API docs.
+func BrandDescription() string {
+	if value := strings.TrimSpace(os.Getenv("BRAND_DESCRIPTION")); value != "" {
+		return value
+	}
+	return "知识库问答与文档理解平台"
+}
+
+// BrandLogoText returns the short text used where the full product name does not fit.
+func BrandLogoText() string {
+	if value := strings.TrimSpace(os.Getenv("BRAND_LOGO_TEXT")); value != "" {
+		return value
+	}
+	return BrandName()
+}
+
+// BrandTenantHint returns the product name shown in IM authorization notices.
+func BrandTenantHint() string {
+	if value := strings.TrimSpace(os.Getenv("BRAND_TENANT_HINT")); value != "" {
+		return value
+	}
+	return BrandFullName()
+}
+
+// BrandUserAgent returns the configurable User-Agent for outbound product webhooks.
+func BrandUserAgent() string {
+	if value := strings.TrimSpace(os.Getenv("BRAND_USER_AGENT")); value != "" {
+		return value
+	}
+	return "knowledge-base-embed-webhook/1.0"
+}
+
+// BrandDesktopName returns the desktop product name. The explicit variable can
+// remove the "Lite" suffix when the desktop build is distributed under another name.
+func BrandDesktopName() string {
+	if value := strings.TrimSpace(os.Getenv("BRAND_DESKTOP_NAME")); value != "" {
+		return value
+	}
+	return BrandFullName() + " Lite"
+}
 // LoadConfig 从配置文件加载配置
 func LoadConfig() (*Config, error) {
 	// 设置配置文件名和路径

@@ -1,5 +1,8 @@
 const STORAGE_KEY = "weknora_settings";
 
+const BRAND_NAME = "测试知识库";
+const BRAND_API_LABEL = `${BRAND_NAME} API`;
+
 function normalizeBaseUrl(baseUrl) {
   if (!baseUrl || typeof baseUrl !== "string") {
     return "";
@@ -29,6 +32,8 @@ function saveSettings(settings) {
 }
 
 module.exports = {
+  BRAND_API_LABEL,
+  BRAND_NAME,
   STORAGE_KEY,
   getSettings,
   normalizeBaseUrl,

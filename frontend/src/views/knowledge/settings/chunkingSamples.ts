@@ -1,3 +1,5 @@
+import { BRAND_NAME } from '@/config/brand'
+
 // Curated sample texts for the chunking debug drawer. Each preset is sized
 // to ≈2000–4000 characters and shaped to exercise a distinct tier of the
 // chunker, so users can quickly see how their config behaves on realistic
@@ -10,13 +12,13 @@ export interface ChunkingSample {
   text: string
 }
 
-const MARKDOWN_SAMPLE = `# WeKnora 知识框架
+const MARKDOWN_SAMPLE = `# ${BRAND_NAME} 知识框架
 
-WeKnora 是一个基于 LLM 的开源企业知识框架，集 RAG 问答、ReAct 智能体、Wiki 知识图谱于一体。本文介绍其设计动机、架构与典型用法。
+${BRAND_NAME} 是一个基于 LLM 的企业知识框架，集 RAG 问答、ReAct 智能体、Wiki 知识图谱于一体。本文介绍其设计动机、架构与典型用法。
 
 ## 设计动机
 
-企业内部知识散落在 Confluence、飞书、Notion、Git 仓库等多种系统，传统全文检索难以理解语义，单一 LLM 又缺少可信赖的上下文来源。WeKnora 的目标是：
+企业内部知识散落在 Confluence、飞书、Notion、Git 仓库等多种系统，传统全文检索难以理解语义，单一 LLM 又缺少可信赖的上下文来源。${BRAND_NAME} 的目标是：
 
 - **多源接入**：把分散内容统一抽取、清洗、向量化
 - **多策略检索**：稠密、稀疏、知识图谱多路召回 + RRF 融合
@@ -60,7 +62,7 @@ WeKnora 是一个基于 LLM 的开源企业知识框架，集 RAG 问答、ReAct
 ### 启动命令
 
 \`\`\`bash
-git clone https://github.com/Tencent/WeKnora && cd WeKnora
+git clone https://example.com/knowledge-base.git && cd knowledge-base
 cp .env.example .env       # 修改你的模型与数据库配置
 make dev-start             # 启动 postgres / redis / qdrant
 make dev-app               # 启动后端，热重载
@@ -71,7 +73,7 @@ make dev-frontend          # 启动前端，自动刷新
 
 ## 架构概览
 
-WeKnora 后端采用清晰的分层架构：
+${BRAND_NAME} 后端采用清晰的分层架构：
 
 \`\`\`
 ┌────────────────────────┐
@@ -109,7 +111,7 @@ Agent 引擎执行经典 ReAct 循环：
 - 故障排查：\`docs/QA.md\`
 - 路线图：\`docs/ROADMAP.md\``
 
-const FAQ_SAMPLE = `# WeKnora 部署与使用 FAQ
+const FAQ_SAMPLE = `# ${BRAND_NAME} 部署与使用 FAQ
 
 本文档汇总社区与内部用户最常问到的问题，按"安装 / 配置 / 检索 / 模型 / 性能"分类。
 

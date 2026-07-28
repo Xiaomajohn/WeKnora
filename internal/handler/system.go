@@ -2930,6 +2930,26 @@ type updateTenantAdminRequest struct {
 	OwnerUserID *string `json:"owner_user_id,omitempty"`
 }
 
+// createTenantAdminRequest is the JSON body for POST /system/admin/tenants.
+// Distinct from tenant.go's createTenantRequest because the admin surface
+// accepts the privileged fields (status, storage_quota_gb) that the
+// self-service POST /tenants deliberately hides. storage_quota_gb is
+// expressed in GiB and converted to bytes server-side so the on-disk
+// row keeps the canonical bytes representation. OwnerUserID, when
+// supplied, makes the named user the Owner of the new workspace;
+// omitted defaults to the caller (admin-self path). The target user
+// MUST already exist — passing an unknown id is rejected with HTTP
+// 400 BEFORE the workspace row is created, because an unattached
+// workspace is worse than no workspace at all (no reachable Owner,
+// yet still occupies storage_bucket / name uniqueness slots).
+type createTenantAdminRequest struct {
+	Name           string  `json:"name"             binding:"required,min=1,max=128"`
+	Description    string  `json:"description"      binding:"max=512"`
+	Status         *string `json:"status,omitempty" binding:"omitempty,oneof=active suspended"`
+	StorageQuotaGB *int64  `json:"storage_quota_gb,omitempty" binding:"omitempty,min=1"`
+	OwnerUserID    *string `json:"owner_user_id,omitempty"`
+}
+
 // loadTenantOwnerUsername is the helper that powers both
 // ListAllTenantsAdmin and GetTenantDetailAdmin. It returns the
 // username of the first active owner found in the tenant's members,
@@ -2969,6 +2989,195 @@ func (h *SystemHandler) loadTenantOwnerUsername(ctx context.Context, tenantID ui
 		return u.Username
 	}
 	return ""
+}
+
+// CreateTenantAdmin godoc
+// @Summary      Create a workspace (SystemAdmin only)
+// @Description  SystemAdmin-managed create endpoint that fills in the
+// @Description  privileged fields the self-service POST /tenants
+// @Description  deliberately hides: status (active / suspended) and
+// @Description  storage_quota_gb. When owner_user_id is supplied the
+// @Description  named user becomes the workspace's Owner; omitted
+// @Description  defaults to the caller (admin-self path). The target
+// @Description  user MUST already exist — unknown ids return 400 and
+// @Description  no workspace row is written. When the admin provisions
+// @Description  a workspace for a tenantless caller the new workspace
+// @Description  is also adopted as their default login tenant; skipped
+// @Description  when admin creates for someone else so the admin
+// @Description  doesn't accidentally rewrite another user's home
+// @Description  tenant. Emits `system.tenant_created` audit row carrying
+// @Description  owner_user_id + admin_self_owner so the operator
+// @Description  history can distinguish "admin provisioned for self"
+// @Description  from "admin provisioned for user X". Distinct from
+// @Description  the Owner-facing POST /tenants (tenant.go's CreateTenant)
+// @Description  which hides status and storage_quota.
+// @Tags         System Admin
+// @Accept       json
+// @Produce      json
+// @Param        request body createTenantAdminRequest true "Workspace to create"
+// @Success      201 {object} AdminTenantListItem "Workspace created"
+// @Failure      400 {object} map[string]interface{} "Validation / unknown owner / bad status"
+// @Failure      403 {object} map[string]interface{} "Forbidden: not a system admin"
+// @Router       /system/admin/tenants [post]
+func (h *SystemHandler) CreateTenantAdmin(c *gin.Context) {
+	ctx := logger.CloneContext(c.Request.Context())
+
+	var req createTenantAdminRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+		return
+	}
+
+	// Default status to 'active' when caller omits it. The DB column
+	// also defaults to 'active', but we materialise it here so the
+	// audit row + the response always reflect the persisted value
+	// without a second round-trip.
+	status := "active"
+	if req.Status != nil && *req.Status != "" {
+		status = *req.Status
+	}
+
+	// Convert GiB → bytes (canonical on-disk unit). Omitting
+	// storage_quota_gb leaves the field at 0; the storage engine
+	// interprets StorageQuota <= 0 as "use the platform default"
+	// (see knowledge_create.go enforcement), so an admin without a
+	// quota in mind gets the same behaviour the UI shows regular users.
+	var storageQuotaBytes int64
+	if req.StorageQuotaGB != nil {
+		storageQuotaBytes = *req.StorageQuotaGB * 1024 * 1024 * 1024
+	}
+
+	// Resolve the Owner target. Default = caller (admin-self). When
+	// the target is specified we look them up eagerly so we can fail
+	// fast with a 400 BEFORE creating the workspace row — easier to
+	// diagnose than rolling a half-created workspace back.
+	callerID, _ := types.UserIDFromContext(ctx)
+	ownerUserID := callerID
+	if req.OwnerUserID != nil && strings.TrimSpace(*req.OwnerUserID) != "" {
+		target := strings.TrimSpace(*req.OwnerUserID)
+		user, err := h.userSvc.GetUserByID(ctx, target)
+		if err != nil || user == nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "owner_user_id refers to non-existent user",
+				"details": target,
+			})
+			return
+		}
+		ownerUserID = user.ID
+	}
+
+	tenant := &types.Tenant{
+		Name:         name,
+		Description:  strings.TrimSpace(req.Description),
+		Status:       status,
+		StorageQuota: storageQuotaBytes,
+	}
+	created, err := h.tenantSvc.CreateTenant(ctx, tenant)
+	if err != nil {
+		msg := err.Error()
+		lower := strings.ToLower(msg)
+		if strings.Contains(lower, "already exists") || strings.Contains(lower, "duplicate") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+			return
+		}
+		logger.Errorf(ctx, "CreateTenantAdmin: CreateTenant failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create workspace"})
+		return
+	}
+
+	// Bootstrap Owner membership. Failing here is a hard error: an
+	// unattached workspace is worse than no workspace at all (no
+	// reachable Owner, yet still occupies storage_bucket / name
+	// uniqueness slots). We roll the workspace row back so the
+	// platform doesn't accumulate unreachable tenants.
+	if h.tenantMemberService == nil {
+		// Defensive: dig should always wire this, but if it doesn't
+		// we fail loud rather than creating an unreachable workspace.
+		if delErr := h.tenantSvc.DeleteTenant(ctx, created.ID); delErr != nil {
+			logger.Errorf(ctx, "CreateTenantAdmin: rollback DeleteTenant failed for orphan tenant %d: %v",
+				created.ID, delErr)
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "tenant member service unavailable; rolled back workspace",
+		})
+		return
+	}
+	if _, err := h.tenantMemberService.EnsureOwner(ctx, ownerUserID, created.ID); err != nil {
+		logger.Errorf(ctx, "CreateTenantAdmin: EnsureOwner failed for user %s tenant %d: %v — rolling back",
+			ownerUserID, created.ID, err)
+		if delErr := h.tenantSvc.DeleteTenant(ctx, created.ID); delErr != nil {
+			logger.Errorf(ctx, "CreateTenantAdmin: rollback DeleteTenant failed for orphan tenant %d: %v",
+				created.ID, delErr)
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to finalise workspace ownership"})
+		return
+	}
+
+	// When the admin provisioned a workspace for a tenantless caller,
+	// adopt it as their default login tenant so they land there after
+	// their next sign-in. Skipped when the owner differs from the
+	// caller — silently rewriting another user's home tenant as a
+	// side-effect of an admin action would be surprising and hard to
+	// roll back. Mirrors tenant.go's CreateTenant admin branch.
+	if ownerUserID == callerID {
+		caller, err := h.userSvc.GetUserByID(ctx, callerID)
+		if err == nil && caller != nil && caller.TenantID == 0 {
+			caller.TenantID = created.ID
+			if uerr := h.userSvc.UpdateUser(ctx, caller); uerr != nil {
+				logger.Errorf(ctx, "CreateTenantAdmin: failed to set first tenant %d as default for user %s: %v — rolling back",
+					created.ID, callerID, uerr)
+				if rerr := h.tenantMemberService.RemoveMember(ctx, ownerUserID, created.ID); rerr != nil {
+					logger.Errorf(ctx, "CreateTenantAdmin: rollback RemoveMember failed: %v", rerr)
+				}
+				if derr := h.tenantSvc.DeleteTenant(ctx, created.ID); derr != nil {
+					logger.Errorf(ctx, "CreateTenantAdmin: rollback DeleteTenant failed: %v", derr)
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to finalise default workspace"})
+				return
+			}
+		}
+	}
+
+	// Audit row. Mirrors tenant.go's CreateTenant admin branch — we
+	// log system.tenant_created with target_tenant_id + owner_user_id
+	// + admin_self_owner so an operator can later tell "admin created
+	// a workspace for themselves" from "admin provisioned for user X".
+	if h.auditSvc != nil {
+		actorID, _ := types.UserIDFromContext(ctx)
+		details, _ := json.Marshal(map[string]any{
+			"target_tenant_id":   created.ID,
+			"target_tenant_name": created.Name,
+			"target_status":      created.Status,
+			"owner_user_id":      ownerUserID,
+			"admin_self_owner":   ownerUserID == actorID,
+		})
+		_ = h.auditSvc.Log(ctx, &types.AuditLog{
+			TenantID:    0,
+			ActorUserID: actorID,
+			ActorRole:   "system_admin",
+			Action:      types.AuditActionSystemTenantCreated,
+			TargetType:  "tenant",
+			TargetID:    strconv.FormatUint(created.ID, 10),
+			Outcome:     types.AuditOutcomeSuccess,
+			Details:     types.JSON(details),
+		})
+	}
+
+	// Build the response in the same AdminTenantListItem shape the
+	// other admin endpoints use, so the front-end (which already
+	// casts the response to SystemTenantInfo / TenantInfo) doesn't
+	// have to special-case the create path.
+	item := &AdminTenantListItem{
+		Tenant:        created,
+		MemberCount:   1,
+		OwnerUsername: h.loadTenantOwnerUsername(ctx, created.ID),
+	}
+	c.JSON(http.StatusCreated, item)
 }
 
 // ListAllTenantsAdmin godoc

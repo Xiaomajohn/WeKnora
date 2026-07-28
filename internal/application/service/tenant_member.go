@@ -352,6 +352,17 @@ func (s *tenantMemberService) RemoveMember(ctx context.Context, userID string, t
 		return ErrMembershipNotFound
 	}
 	if current.Role == types.TenantRoleOwner {
+		// Platform SystemAdmin membership management is an explicit recovery
+		// path: it may remove the last Owner when an administrator is cleaning
+		// up a user's workspace access. Tenant-level Owner operations retain
+		// the invariant and must transfer ownership first.
+		if types.IsSystemAdminFromContext(ctx) {
+			if err := s.repo.SoftDelete(ctx, userID, tenantID); err != nil {
+				return err
+			}
+			s.emitRemovalAudit(ctx, tenantID, userID)
+			return nil
+		}
 		err := s.repo.RemoveOwnerAtomically(ctx, userID, tenantID)
 		switch {
 		case errors.Is(err, apprepo.ErrLastOwner):

@@ -381,6 +381,20 @@ func TestTenantMemberService_RemoveMember_BlocksLastOwner(t *testing.T) {
 	}
 }
 
+func TestTenantMemberService_RemoveMember_SystemAdminAllowsLastOwnerRemoval(t *testing.T) {
+	svc, repo := newServiceWithRepo()
+	ctx := context.WithValue(context.Background(), types.SystemAdminContextKey, true)
+	if _, err := svc.EnsureOwner(ctx, "owner", 1); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := svc.RemoveMember(ctx, "owner", 1); err != nil {
+		t.Fatalf("system admin should remove the last owner, got %v", err)
+	}
+	if len(repo.rows) != 1 || !repo.rows[0].DeletedAt.Valid {
+		t.Fatalf("last owner membership should be soft-deleted, rows=%+v", repo.rows)
+	}
+}
+
 func TestTenantMemberService_RemoveMember_AllowsContributorRemoval(t *testing.T) {
 	svc, _ := newServiceWithRepo()
 	ctx := context.Background()

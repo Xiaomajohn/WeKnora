@@ -1,4 +1,4 @@
-const { getSettings } = require("../../utils/config");
+const { BRAND_NAME, getSettings } = require("../../utils/config");
 const { createSession, knowledgeChat } = require("../../utils/request");
 const { collectAnswerFromSSE } = require("../../utils/sse");
 
@@ -6,6 +6,7 @@ Page({
   data: {
     answer: "",
     loading: false,
+    brandName: BRAND_NAME,
     query: "",
     rawResponse: "",
     sessionId: ""

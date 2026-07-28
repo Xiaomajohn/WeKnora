@@ -9,6 +9,9 @@
   echo "window.__RUNTIME_CONFIG__ = {"
   echo "  MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-50},"
   echo "  BRAND_NAME: \"${BRAND_NAME:-WeKnora}\","
+  echo "  BRAND_FULL_NAME: \"${BRAND_FULL_NAME:-${BRAND_NAME:-WeKnora}}\","
+  echo "  BRAND_DESCRIPTION: \"${BRAND_DESCRIPTION:-知识库问答与文档理解平台}\","
+  echo "  BRAND_LOGO_TEXT: \"${BRAND_LOGO_TEXT:-${BRAND_NAME:-WeKnora}}\","
   if [ -n "${BRAND_OFFICIAL_URL:-}" ]; then
     echo "  BRAND_OFFICIAL_URL: \"${BRAND_OFFICIAL_URL}\","
   fi

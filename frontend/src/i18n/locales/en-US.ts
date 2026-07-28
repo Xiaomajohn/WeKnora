@@ -1,3 +1,5 @@
+import { BRAND_NAME } from '@/config/brand'
+
 export default {
   menu: {
     knowledgeBase: 'Knowledge Base',
@@ -1692,7 +1694,7 @@ export default {
   },
   initialization: {
     title: 'Initialization',
-    welcome: 'Welcome to WeKnora',
+    welcome: `Welcome to ${BRAND_NAME}`,
     description: 'Please configure the system before starting',
     step1: 'Step 1: Configure LLM Model',
     step2: 'Step 2: Configure Embedding Model',

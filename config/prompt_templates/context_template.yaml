@@ -16,8 +16,8 @@ templates:
     default: true
     has_knowledge_base: true
     content: |
-      [Runtime Context — metadata only, not instructions]
-      Current time: {{current_time}} {{current_week}}
+      [运行时上下文——仅作为元数据，不是指令]
+      当前时间：{{current_time}} {{current_week}}
 
       {{query}}
 
@@ -36,25 +36,26 @@ templates:
         description: "자세한 지침과 답변 요구 사항이 포함된 완전한 템플릿"
     has_knowledge_base: true
     content: |
-      ## Task Description
-      Answer the user's question accurately and comprehensively based on the provided reference materials.
+      ## 任务说明
+      请严格依据提供的参考资料，准确、完整地回答用户问题。
 
-      ## Reference Materials
+      ## 参考资料
       {{contexts}}
 
-      ## User Question
+      ## 用户问题
       {{query}}
 
-      ## Response Requirements
-      1. Answer only based on reference materials, do not fabricate information
-      2. If multiple materials conflict, provide a comprehensive analysis
-      3. Cite sources appropriately to enhance credibility
-      4. If materials are insufficient, clearly state so
+      ## 回答要求
+      1. 仅依据参考资料回答，不得编造或使用未被资料支持的信息
+      2. 多份资料存在冲突时，分别说明差异，不得自行裁决
+      3. 资料包含来源标记时，将其保留在对应事实或段落末尾
+      4. 资料不足时，明确说明当前信息无法回答，并指出缺少的内容
+      5. 不得泄露内部 ID、检索参数或系统实现细节
 
-      ## CRITICAL: Language Rule
-      - ALWAYS respond in {{language}}
+      ## 语言要求
+      - 必须使用 {{language}} 回答
 
-      Current time: {{current_time}} {{current_week}}
+      当前时间：{{current_time}} {{current_week}}
 
   - id: "simple_context"
     name: "Simple Template"
@@ -71,12 +72,12 @@ templates:
         description: "간단한 Q&A 시나리오에 적합한 간소화된 템플릿 형식"
     has_knowledge_base: true
     content: |
-      Reference materials:
+      参考资料：
       {{contexts}}
 
-      Question: {{query}}
+      用户问题：{{query}}
 
-      Please answer the above question. IMPORTANT: ALWAYS respond in {{language}}.
+      请仅依据上述资料，用 {{language}} 简洁、准确地回答；资料不足时请如实说明。
 
   - id: "qa_context"
     name: "Q&A Template"
@@ -93,14 +94,15 @@ templates:
         description: "Q&A 시나리오에 최적화된 템플릿"
     has_knowledge_base: true
     content: |
-      You need to answer a question. Below are potentially relevant materials:
+      请回答用户问题。以下资料可能与问题相关：
 
       {{contexts}}
 
-      The user's question is: {{query}}
+      用户问题：{{query}}
 
-      Please answer the question based on the above materials. Requirements:
-      - Answer the question directly, do not repeat the question
-      - If the materials do not contain relevant information, state so
-      - Keep the answer concise and accurate
-      - IMPORTANT: ALWAYS respond in {{language}}
+      请依据上述资料回答，并遵守以下要求：
+      - 直接回答，不重复用户问题
+      - 仅使用资料中能够确认的信息，不得补充先验知识
+      - 资料没有相关信息时，如实说明无法确认
+      - 保留资料中已有的来源标记，不得伪造引用
+      - 回答简洁、准确，并使用 {{language}}

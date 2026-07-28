@@ -1,13 +1,12 @@
-// Package main is the main package for the WeKnora server
+// Package main is the main package for the knowledge base server
 // It contains the main function and the entry point for the server
 //
-// @title           WeKnora API
+// @title           Knowledge Base API
 // @version         1.0
-// @description     WeKnora 知识库管理系统 API 文档
+// @description     Knowledge base management system API documentation
 // @termsOfService  http://swagger.io/terms/
 //
-// @contact.name   WeKnora Github
-// @contact.url    https://github.com/Tencent/WeKnora
+// @contact.name   Product Support
 //
 // @BasePath  /api/v1
 //
@@ -32,6 +31,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	productdocs "github.com/Tencent/WeKnora/docs"
+
 	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/container"
 	"github.com/Tencent/WeKnora/internal/logger"
@@ -40,6 +41,9 @@ import (
 )
 
 func main() {
+	productdocs.SwaggerInfo.Title = config.BrandFullName() + " API"
+	productdocs.SwaggerInfo.Description = config.BrandDescription() + " API 文档"
+
 	// Set Gin mode
 	if os.Getenv("GIN_MODE") == "release" {
 		gin.SetMode(gin.ReleaseMode)

@@ -11,10 +11,12 @@ services:
       - "${FRONTEND_PORT:-80}:80"
     environment:
       - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-50}
-      # 品牌定制：仅修改 BRAND_NAME 即可让登录页 logo、侧边栏 logo、
-      # 新手指引文案显示为指定品牌。BRAND_OFFICIAL_URL / BRAND_GITHUB_URL
-      # 留空则隐藏右上角"官方网站"和"GitHub"按钮。
+      # 品牌定制：BRAND_NAME 控制 logo 文案；BRAND_FULL_NAME / BRAND_DESCRIPTION
+      # 控制页面标题和描述；BRAND_OFFICIAL_URL / BRAND_GITHUB_URL 留空则隐藏链接。
       - BRAND_NAME=${BRAND_NAME:-WeKnora}
+      - BRAND_FULL_NAME=${BRAND_FULL_NAME:-}
+      - BRAND_DESCRIPTION=${BRAND_DESCRIPTION:-}
+      - BRAND_LOGO_TEXT=${BRAND_LOGO_TEXT:-}
       - BRAND_OFFICIAL_URL=${BRAND_OFFICIAL_URL:-}
       - BRAND_GITHUB_URL=${BRAND_GITHUB_URL:-}
       - APP_HOST=${APP_HOST:-app}

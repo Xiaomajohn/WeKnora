@@ -1,6 +1,7 @@
 package types
 
 import (
+	"os"
 	"strings"
 	"time"
 )
@@ -97,6 +98,12 @@ var (
 		Label:       "用户语言",
 		Description: "用户界面的语言偏好，如 Chinese (Simplified)、English、Korean 等，用于控制 LLM 回答语言",
 	}
+
+	PlaceholderBrand = PromptPlaceholder{
+		Name:        "brand",
+		Label:       "产品名称",
+		Description: "当前部署使用的产品品牌名称",
+	}
 )
 
 // PlaceholdersByField returns the available placeholders for a specific prompt field type
@@ -110,6 +117,7 @@ func PlaceholdersByField(fieldType PromptFieldType) []PromptPlaceholder {
 			PlaceholderCurrentTime,
 			PlaceholderCurrentWeek,
 			PlaceholderLanguage,
+			PlaceholderBrand,
 		}
 	case PromptFieldAgentSystemPrompt:
 		// Agent mode system prompt
@@ -118,6 +126,7 @@ func PlaceholdersByField(fieldType PromptFieldType) []PromptPlaceholder {
 			PlaceholderWebSearchStatus,
 			PlaceholderCurrentTime,
 			PlaceholderLanguage,
+			PlaceholderBrand,
 		}
 	case PromptFieldContextTemplate:
 		return []PromptPlaceholder{
@@ -126,6 +135,7 @@ func PlaceholdersByField(fieldType PromptFieldType) []PromptPlaceholder {
 			PlaceholderCurrentTime,
 			PlaceholderCurrentWeek,
 			PlaceholderLanguage,
+			PlaceholderBrand,
 		}
 	case PromptFieldRewriteSystemPrompt:
 		// Rewrite system prompt supports same placeholders as rewrite user prompt
@@ -135,6 +145,7 @@ func PlaceholdersByField(fieldType PromptFieldType) []PromptPlaceholder {
 			PlaceholderCurrentTime,
 			PlaceholderYesterday,
 			PlaceholderLanguage,
+			PlaceholderBrand,
 		}
 	case PromptFieldRewritePrompt:
 		return []PromptPlaceholder{
@@ -143,11 +154,13 @@ func PlaceholdersByField(fieldType PromptFieldType) []PromptPlaceholder {
 			PlaceholderCurrentTime,
 			PlaceholderYesterday,
 			PlaceholderLanguage,
+			PlaceholderBrand,
 		}
 	case PromptFieldFallbackPrompt:
 		return []PromptPlaceholder{
 			PlaceholderQuery,
 			PlaceholderLanguage,
+			PlaceholderBrand,
 		}
 	default:
 		return []PromptPlaceholder{}
@@ -167,6 +180,7 @@ func AllPlaceholders() []PromptPlaceholder {
 		PlaceholderKnowledgeBases,
 		PlaceholderWebSearchStatus,
 		PlaceholderLanguage,
+		PlaceholderBrand,
 	}
 }
 
@@ -215,6 +229,16 @@ func RenderPromptPlaceholders(template string, vals PlaceholderValues) string {
 	autoFill("current_time", now.Format("2006-01-02 15:04:05"))
 	autoFill("current_week", now.Weekday().String())
 	autoFill("yesterday", now.AddDate(0, 0, -1).Format("2006-01-02"))
+	if _, exists := vals["brand"]; !exists && strings.Contains(template, "{{brand}}") {
+		brand := strings.TrimSpace(os.Getenv("BRAND_FULL_NAME"))
+		if brand == "" {
+			brand = strings.TrimSpace(os.Getenv("BRAND_NAME"))
+		}
+		if brand == "" {
+			brand = "WeKnora"
+		}
+		vals["brand"] = brand
+	}
 
 	result := template
 	for key, value := range vals {

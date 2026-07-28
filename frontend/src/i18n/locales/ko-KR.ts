@@ -1,3 +1,5 @@
+import { BRAND_NAME } from '@/config/brand'
+
 export default {
   menu: {
     knowledgeBase: "지식베이스",
@@ -52,12 +54,12 @@ export default {
     reopen: "사용 가이드",
     steps: {
       welcome: {
-        title: "WeKnora에 오신 것을 환영합니다",
+        title: `${BRAND_NAME}에 오신 것을 환영합니다`,
         desc: "몇 단계만으로 지식 베이스, 대화, 에이전트의 핵심 사용법을 안내합니다. '다음'을 눌러 시작하세요.",
       },
       knowledge: {
         title: "지식 베이스 만들기",
-        desc: "모든 것의 시작점입니다. 문서, 웹페이지, FAQ를 업로드하면 WeKnora가 자동으로 분석하고 색인합니다. 여기를 클릭해 지식 베이스로 이동하세요.",
+        desc: `모든 것의 시작점입니다. 문서, 웹페이지, FAQ를 업로드하면 ${BRAND_NAME}가 자동으로 분석하고 색인합니다. 여기를 클릭해 지식 베이스로 이동하세요.`,
       },
       chat: {
         title: "AI 대화 시작하기",
@@ -1547,7 +1549,7 @@ export default {
   },
   initialization: {
     title: "초기화",
-    welcome: "WeKnora에 오신 것을 환영합니다",
+    welcome: `${BRAND_NAME}에 오신 것을 환영합니다`,
     description: "사용을 시작하려면 먼저 시스템을 구성하세요",
     step1: "1단계: LLM 모델 구성",
     step2: "2단계: 임베딩 모델 구성",

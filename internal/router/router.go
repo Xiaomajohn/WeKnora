@@ -936,12 +936,14 @@ func RegisterSystemAdminRoutes(
 		)
 
 		// Workspace management surface for SystemAdmin (P3). Mirrors
-		// the user-management surface above: list, detail, update,
-		// delete. The tenant create path uses the existing
-		// POST /tenants endpoint (SystemAdmin's CanAccessAllTenants
-		// branch already accepts the full Tenant payload) with an
-		// optional owner_user_id body field that admins can use to
-		// attribute a workspace to a non-admin user.
+		// the user-management surface above: create / list / detail /
+		// update / delete. The create path exposes the privileged
+		// fields (status, storage_quota_gb) the self-service POST
+		// /tenants deliberately hides, plus an owner_user_id hook that
+		// admins use to provision a workspace on behalf of a tenantless
+		// user (target user must already exist). Empty / omitted
+		// owner_user_id defaults to the caller (admin-self path).
+		adminRoutes.POST("/tenants", handler.CreateTenantAdmin)
 		adminRoutes.GET("/tenants", handler.ListAllTenantsAdmin)
 		adminRoutes.GET("/tenants/:id", handler.GetTenantDetailAdmin)
 		adminRoutes.PATCH("/tenants/:id", handler.UpdateTenantAdmin)

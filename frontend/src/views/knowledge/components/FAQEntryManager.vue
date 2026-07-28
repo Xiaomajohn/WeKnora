@@ -950,6 +950,7 @@ import FAQTagTooltip from '@/components/FAQTagTooltip.vue'
 import KBInfoPopover from '@/components/KBInfoPopover.vue'
 import KBSwitcherDropdown from '@/components/KBSwitcherDropdown.vue'
 import { useUIStore } from '@/stores/ui'
+import { BRAND_NAME } from '@/config/brand'
 
 interface FAQEntry {
   id: number
@@ -2516,10 +2517,10 @@ const downloadExampleOptions = computed(() => [
 // 示例数据
 const exampleData: FAQEntryPayload[] = [
   {
-    standard_question: '什么是 WeKnora？',
-    answers: ['WeKnora 是一个智能知识库管理系统', '它支持多种知识库类型和导入方式'],
-    similar_questions: ['WeKnora 是什么？', '介绍一下 WeKnora'],
-    negative_questions: ['这不是 WeKnora', '与 WeKnora 无关'],
+    standard_question: `什么是 ${BRAND_NAME}？`,
+    answers: [`${BRAND_NAME} 是一个智能知识库管理系统`, '它支持多种知识库类型和导入方式'],
+    similar_questions: [`${BRAND_NAME} 是什么？`, `介绍一下 ${BRAND_NAME}`],
+    negative_questions: [`这不是 ${BRAND_NAME}`, `与 ${BRAND_NAME} 无关`],
     tag_name: '产品介绍',
   },
   {
