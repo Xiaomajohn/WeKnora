@@ -25,6 +25,13 @@ export interface UploadConfirmResult {
   urls?: string[]
   manual?: UploadConfirmManualSource
   reparse?: UploadConfirmReparseSource
+  // autoParse controls whether the upload is auto-enqueued for parsing.
+  // When undefined the backend default (true) is used; when false the file
+  // is stored in the "uploaded" state and only progresses via explicit
+  // /reparse or the per-KB scheduled_rebuild scheduler. No background
+  // process auto-promotes uploaded rows. See the auto_parse form field on
+  // /api/v1/knowledge-bases/{id}/knowledge/file|url|manual.
+  autoParse?: boolean
 }
 
 export interface OpenUploadConfirmOptions {

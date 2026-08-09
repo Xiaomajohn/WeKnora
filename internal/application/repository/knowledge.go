@@ -486,6 +486,88 @@ func (r *knowledgeRepository) CountKnowledgeByStatus(
 	return count, nil
 }
 
+// ListKnowledgeByStatus returns the next knowledge rows in the given parse
+// statuses, oldest-first (created_at ASC). Soft-deleted rows are excluded.
+// When kbID is empty the tenant-wide scope is used; the parser scheduler
+// passes an explicit kbID so it can bound its work per-knowledge-base.
+//
+// Used by the in-process parser scheduler to pick the next "uploaded"
+// document to promote into the asynq pipeline.
+func (r *knowledgeRepository) ListKnowledgeByStatus(
+	ctx context.Context,
+	tenantID uint64,
+	kbID string,
+	parseStatuses []string,
+	limit int,
+) ([]*types.Knowledge, error) {
+	if len(parseStatuses) == 0 || limit <= 0 {
+		return nil, nil
+	}
+
+	var rows []*types.Knowledge
+	query := r.db.WithContext(ctx).Model(&types.Knowledge{}).
+		Where("tenant_id = ?", tenantID).
+		Where("deleted_at IS NULL").
+		Where("parse_status IN ?", parseStatuses).
+		Order("created_at ASC").
+		Limit(limit)
+
+	if kbID != "" {
+		query = query.Where("knowledge_base_id = ?", kbID)
+	}
+
+	if err := query.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// ListKnowledgeForRepair returns failed (or otherwise non-terminal) knowledge
+// rows whose updated_at is older than minAgeBefore, oldest-first. Soft-deleted
+// rows are excluded.
+//
+// Used by the in-process knowledge-repair scheduler
+// (knowledge_repair_scheduler.go) to find candidates whose failures are
+// stale enough to retry. Without the minAgeBefore filter the scheduler
+// would hammer documents that failed milliseconds ago — most parser
+// failures (docreader transient timeouts, embedding 5xx, Redis hiccups)
+// need a brief cooldown, and an immediate retry just wastes capacity.
+//
+// Pass the zero time.Time{} to disable the age filter (every candidate is
+// eligible, useful for tests).
+func (r *knowledgeRepository) ListKnowledgeForRepair(
+	ctx context.Context,
+	tenantID uint64,
+	kbID string,
+	parseStatuses []string,
+	minAgeBefore time.Time,
+	limit int,
+) ([]*types.Knowledge, error) {
+	if len(parseStatuses) == 0 || limit <= 0 {
+		return nil, nil
+	}
+
+	var rows []*types.Knowledge
+	query := r.db.WithContext(ctx).Model(&types.Knowledge{}).
+		Where("tenant_id = ?", tenantID).
+		Where("deleted_at IS NULL").
+		Where("parse_status IN ?", parseStatuses).
+		Order("updated_at ASC").
+		Limit(limit)
+
+	if kbID != "" {
+		query = query.Where("knowledge_base_id = ?", kbID)
+	}
+	if !minAgeBefore.IsZero() {
+		query = query.Where("updated_at < ?", minAgeBefore)
+	}
+
+	if err := query.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
 // SearchKnowledge searches knowledge items by keyword across the tenant
 // If keyword is empty, returns recent files
 // Only returns documents from document-type knowledge bases (excludes FAQ)

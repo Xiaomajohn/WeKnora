@@ -1,0 +1,26 @@
+FROM python:3.10.18-bookworm
+
+ARG APT_MIRROR=""
+RUN if [ -n "$APT_MIRROR" ]; then \
+      sed -i "s@http://deb.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources && \
+      sed -i "s@http://security.debian.org@${APT_MIRROR}@g" /etc/apt/sources.list.d/debian.sources; \
+    fi && \
+    apt-get update && apt-get install -y --no-install-recommends \
+      libreoffice \
+      fontconfig fonts-noto-cjk fonts-dejavu-core tini curl && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY document-converter/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+COPY document-converter/app.py ./app.py
+
+RUN groupadd --system converter && \
+    useradd --system --gid converter --home-dir /nonexistent --shell /usr/sbin/nologin converter && \
+    mkdir -p /tmp/document-converter && \
+    chown converter:converter /tmp/document-converter
+
+USER converter
+EXPOSE 8080
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--no-access-log"]

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/types"
@@ -67,6 +68,47 @@ func (r *knowledgeBaseRepository) GetKnowledgeBaseByIDs(ctx context.Context, ids
 func (r *knowledgeBaseRepository) ListKnowledgeBases(ctx context.Context) ([]*types.KnowledgeBase, error) {
 	var kbs []*types.KnowledgeBase
 	if err := r.db.WithContext(ctx).Find(&kbs).Error; err != nil {
+		return nil, err
+	}
+	return kbs, nil
+}
+
+// ListScheduledRebuildKBs returns every non-temporary document KB across
+// every tenant whose scheduled_rebuild_config.enabled = true. Backs the
+// in-process scheduled-rebuild scheduler (knowledge_scheduled_rebuild.go).
+//
+// The GORM `deleted_at` auto-scope on KnowledgeBase filters out
+// soft-deleted rows for us, so we only add the explicit filter on the
+// scheduled_rebuild_config JSON. FAQ / Wiki KBs are skipped by the
+// `type = 'document'` predicate — they don't carry the parse_status
+// state machine that scheduled rebuild operates on.
+//
+// On sqlite the `(scheduled_rebuild_config->>'enabled')` expression is
+// not supported; we fall back to loading every KB and filtering in Go.
+// The fallback is fine for typical deployments (KB count is in the
+// thousands at most) and lets the same code path serve both backends
+// without conditional GORM dialects.
+func (r *knowledgeBaseRepository) ListScheduledRebuildKBs(ctx context.Context) ([]*types.KnowledgeBase, error) {
+	var kbs []*types.KnowledgeBase
+	q := r.db.WithContext(ctx).
+		Where("type = ?", types.KnowledgeBaseTypeDocument).
+		Where("is_temporary = ?", false)
+	driver := strings.ToLower(r.db.Dialector.Name())
+	if driver == "postgres" || driver == "paradedb" || driver == "mysql" {
+		// Postgres-style JSONB path expression: only rows whose config
+		// is non-null AND has enabled=true. The GIN index on
+		// ((scheduled_rebuild_config->>'enabled')) (migration 000070)
+		// keeps this O(log n) instead of a full table scan.
+		q = q.Where(
+			"scheduled_rebuild_config IS NOT NULL " +
+				"AND (scheduled_rebuild_config->>'enabled')::boolean = true",
+		)
+	} else {
+		// SQLite / fallback: pull every document KB and let the
+		// scheduler-side filter handle nil / enabled=false rows.
+		// Keeps the code simple and the cost bounded for typical sizes.
+	}
+	if err := q.Order("created_at ASC").Find(&kbs).Error; err != nil {
 		return nil, err
 	}
 	return kbs, nil

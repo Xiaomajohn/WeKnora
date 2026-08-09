@@ -1,22 +1,37 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 
-defineProps<{
+const props = withDefaults(defineProps<{
   count: number;
   deleteLoading?: boolean;
   reparseLoading?: boolean;
+  // Number of selected rows whose parse_status is uploaded/pending.
+  // The "批量解析" button is enabled iff this is > 0; pure completed /
+  // failed selections leave it disabled.
+  parseCount?: number;
   // When true the bar stays visible even with 0 selections, so users can exit
   // batch mode from here without selecting anything first.
   visible?: boolean;
-}>();
+}>(), {
+  parseCount: 0,
+});
 
 const emit = defineEmits<{
   (e: 'cancel'): void;
   (e: 'delete'): void;
   (e: 'reparse'): void;
+  (e: 'parse'): void;
 }>();
 
 const { t } = useI18n();
+
+// Only enable 批量解析 when at least one selected row is in an
+// unparsed state. Loading / no-selection states follow the same
+// rules as the other buttons in this bar.
+const parseDisabled = computed(
+  () => props.count === 0 || props.deleteLoading || props.reparseLoading || props.parseCount <= 0,
+);
 </script>
 
 <template>
@@ -31,6 +46,17 @@ const { t } = useI18n();
           </t-button>
         </div>
         <div class="batch-bar-actions">
+          <!-- 批量解析：仅当所选项含 uploaded/pending 文档时可点。
+               复用 /batch-reparse 端点（按 ID 触发 reparse，对未解析文档等价于解析）。 -->
+          <t-button theme="primary" variant="outline" size="small"
+            :disabled="parseDisabled" :loading="reparseLoading"
+            :title="parseCount > 0 ? t('knowledgeBase.batchParseTooltip', { count: parseCount })
+                                   : t('knowledgeBase.batchParseDisabledHint')"
+            @click="emit('parse')">
+            <template #icon><t-icon name="play" size="14px" /></template>
+            {{ t('knowledgeBase.batchParse') }}
+          </t-button>
+
           <t-popconfirm theme="warning" :content="t('knowledgeBase.confirmBatchReparseDocument', { count })"
             :confirm-btn="{ content: t('knowledgeBase.confirmBatchReparse'), theme: 'warning' }"
             :cancel-btn="{ content: t('common.cancel') }" placement="top" @confirm="emit('reparse')">

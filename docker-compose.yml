@@ -42,7 +42,7 @@ services:
       args:
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
-      - NO_PROXY=${NO_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-},document-converter
       - APK_MIRROR_ARG=${APK_MIRROR_ARG:-}
     container_name: WeKnora-app
     ports:
@@ -78,7 +78,7 @@ services:
     environment:
       - HTTP_PROXY=${HTTP_PROXY:-}      
       - HTTPS_PROXY=${HTTPS_PROXY:-}
-      - NO_PROXY=${NO_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-},document-converter
       - LOG_LEVEL=${LOG_LEVEL:-}
       - COS_SECRET_ID=${COS_SECRET_ID:-}
       - COS_SECRET_KEY=${COS_SECRET_KEY:-}
@@ -129,6 +129,9 @@ services:
       - MILVUS_METRIC_TYPE=${MILVUS_METRIC_TYPE:-IP}
       - DOCREADER_ADDR=${DOCREADER_ADDR:-docreader:50051}
       - DOCREADER_TRANSPORT=${DOCREADER_TRANSPORT:-grpc}
+      - DOCUMENT_CONVERTER_URL=${DOCUMENT_CONVERTER_URL:-http://document-converter:8080}
+      - DOCUMENT_CONVERTER_TIMEOUT=${DOCUMENT_CONVERTER_TIMEOUT:-60s}
+      - DOCUMENT_CONVERTER_MAX_RESPONSE_MB=${DOCUMENT_CONVERTER_MAX_RESPONSE_MB:-50}
       # docreader gRPC TLS / 认证（客户端侧）
       - GRPC_TLS_ENABLED=${GRPC_TLS_ENABLED:-false}
       - GRPC_TLS_CERT=${GRPC_TLS_CERT:-}
@@ -229,8 +232,11 @@ services:
         condition: service_healthy
       docreader:
         condition: service_healthy
+      document-converter:
+        condition: service_healthy
     networks:
       - WeKnora-network
+      - document-converter-network
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -304,6 +310,44 @@ services:
     networks:
       - WeKnora-network
     restart: "no"
+
+  document-converter:
+    image: wechatopenai/weknora-document-converter:${WEKNORA_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.document-converter
+      args:
+        - APT_MIRROR=${APT_MIRROR:-}
+    container_name: WeKnora-document-converter
+    expose:
+      - "8080"
+    environment:
+      - CONVERTER_MAX_FILE_MB=${CONVERTER_MAX_FILE_MB:-50}
+      - CONVERTER_MAX_DECODED_MB=${CONVERTER_MAX_DECODED_MB:-100}
+      - CONVERTER_MAX_OUTPUT_MB=${CONVERTER_MAX_OUTPUT_MB:-50}
+      - CONVERTER_TIMEOUT_SECONDS=${CONVERTER_TIMEOUT_SECONDS:-45}
+      - CONVERTER_MAX_CONCURRENCY=${CONVERTER_MAX_CONCURRENCY:-2}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # 临时工作目录需要可写，但 read_only: true 下 tmpfs 必须是 uid=999 才允许 converter 用户写入。
+    # compose v2.27 tmpfs 短形式不支持指定 uid/gid，所以这里不再 read_only，而是依赖
+    # cap_drop: ALL + no-new-privileges + 非 root 用户运行来降低风险。
+    tmpfs:
+      - /tmp/document-converter:rw,noexec,nosuid,size=512m,uid=999,gid=999,mode=1770
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 1g
+    cpus: 2.0
+    networks:
+      - document-converter-network
+    restart: unless-stopped
 
   docreader:
     image: wechatopenai/weknora-docreader:${WEKNORA_VERSION:-latest}
@@ -888,6 +932,9 @@ services:
 networks:
   WeKnora-network:
     driver: bridge
+  document-converter-network:
+    driver: bridge
+    internal: true
 
 volumes:
   postgres-data:

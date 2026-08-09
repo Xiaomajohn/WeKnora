@@ -402,9 +402,19 @@ const handleConfigChange = () => {
 }
 
 // 处理启用/禁用切换
+//
+// Text / Tags / Nodes / Relations are all OPTIONAL overrides on top of the
+// global prompt template shipped in config/prompt_templates — the actual
+// extraction always runs against each chunk's real content, never against
+// any value entered here. So when the operator flips the switch back on
+// after a disable cycle we deliberately do NOT auto-seed sample data:
+// filling fake "工作于/毕业于/..." tags would silently steer the LLM
+// toward a schema the operator never asked for. If the operator wants to
+// curate examples, the "生成随机文本" / "生成随机标签" buttons stay
+// available; otherwise the global default prompt does the extraction.
 const handleEnabledChange = () => {
-  // 当关闭提取功能时，清空示例数据，但保留自定义指令以便再次启用时恢复。
   if (!localGraphExtract.value.enabled) {
+    // 当关闭提取功能时，清空示例数据，但保留自定义指令以便再次启用时恢复。
     localGraphExtract.value.text = ''
     localGraphExtract.value.tags = []
     localGraphExtract.value.nodes = []

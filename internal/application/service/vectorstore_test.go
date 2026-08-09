@@ -957,6 +957,9 @@ func (r *realKBRepo) TogglePinKnowledgeBase(_ context.Context, _ string, _ uint6
 func (r *realKBRepo) ListUserKBPinIDs(_ context.Context, _ uint64, _ string) (map[string]time.Time, error) {
 	return map[string]time.Time{}, nil
 }
+func (r *realKBRepo) ListScheduledRebuildKBs(_ context.Context) ([]*types.KnowledgeBase, error) {
+	return nil, nil
+}
 func (r *realKBRepo) SetUserKBPin(_ context.Context, _ uint64, _ string, _ string, _ bool) (*time.Time, error) {
 	return nil, nil
 }

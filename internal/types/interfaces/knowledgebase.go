@@ -61,17 +61,25 @@ type KnowledgeBaseService interface {
 	ListKnowledgeBasesByTenantID(ctx context.Context, tenantID uint64) ([]*types.KnowledgeBase, error)
 
 	// UpdateKnowledgeBase updates knowledge base information
+	//
 	// Parameters:
 	//   - ctx: Context information
 	//   - id: Unique identifier of the knowledge base
 	//   - name: New knowledge base name
 	//   - description: New knowledge base description
 	//   - config: Knowledge base configuration, including chunking strategy, vectorization settings, etc.
+	//   - scheduledRebuildConfig: optional per-KB scheduled-rebuild
+	//     subtree. nil leaves the persisted JSONB column untouched; a
+	//     non-nil value (including an all-default one) overwrites the
+	//     previous JSONB verbatim. Handler layer normalises via
+	//     (*ScheduledRebuildConfig).Normalize() before passing it down.
 	// Returns:
 	//   - Updated knowledge base object
 	//   - Possible errors such as not existing, insufficient permissions, etc.
 	UpdateKnowledgeBase(ctx context.Context,
-		id string, name string, description string, config *types.KnowledgeBaseConfig,
+		id string, name string, description string,
+		config *types.KnowledgeBaseConfig,
+		scheduledRebuildConfig *types.ScheduledRebuildConfig,
 	) (*types.KnowledgeBase, error)
 
 	// DeleteKnowledgeBase deletes a knowledge base
@@ -241,4 +249,15 @@ type KnowledgeBaseRepository interface {
 	ListUserKBPinIDs(
 		ctx context.Context, tenantID uint64, userID string,
 	) (map[string]time.Time, error)
+
+	// ListScheduledRebuildKBs returns every KB across every tenant whose
+	// scheduled_rebuild_config.enabled = true. Backs the global scheduled-
+	// rebuild scheduler (knowledge_scheduled_rebuild.go) — the scheduler
+	// walks this list on each poll, then per-KB checks its declared
+	// interval to decide whether to tick.
+	//
+	// Soft-deleted KBs and FAQ/Wiki KBs are excluded — the document-
+	// only filter ensures scheduled rebuild only targets KBs that carry
+	// parse_status rows.
+	ListScheduledRebuildKBs(ctx context.Context) ([]*types.KnowledgeBase, error)
 }

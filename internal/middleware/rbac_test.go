@@ -81,6 +81,28 @@ func TestRequireRole_RejectsBelowMin(t *testing.T) {
 	}
 }
 
+func TestRequireRole_ContributorFloor(t *testing.T) {
+	cases := []struct {
+		name string
+		role types.TenantRole
+		want int
+	}{
+		{name: "viewer rejected", role: types.TenantRoleViewer, want: http.StatusForbidden},
+		{name: "contributor allowed", role: types.TenantRoleContributor, want: http.StatusOK},
+		{name: "admin allowed", role: types.TenantRoleAdmin, want: http.StatusOK},
+		{name: "owner allowed", role: types.TenantRoleOwner, want: http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := rbacTestHarness(tc.role, "u1",
+				RequireRole(types.TenantRoleContributor, cfgRBAC(true)))
+			if w.Code != tc.want {
+				t.Fatalf("role %s at Contributor floor: got %d, want %d", tc.role, w.Code, tc.want)
+			}
+		})
+	}
+}
+
 func TestRequireRoleOrSystemAdmin_AllowsSystemAdminBelowTenantRole(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

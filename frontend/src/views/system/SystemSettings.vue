@@ -386,6 +386,26 @@
               />
             </div>
           </t-popconfirm>
+          <!--
+            Generic string_list control. Used by parse_status allowlists
+            where each tag is a free-form value validated by the backend
+            rather than by an inline popconfirm. The whole list is
+            committed as a single PUT on blur (rather than per-entry
+            confirm like SSRF) because a typo in a parse-status name is
+            recoverable — the backend drops unknown entries with a
+            warning and falls back to defaults — not a privilege-
+            escalation risk.
+          -->
+          <t-tag-input
+            v-else-if="item.value_type === 'string_list'"
+            v-model="editValues[item.key]"
+            :placeholder="emptyListPlaceholder"
+            :aria-label="keyLabel(item.key)"
+            :disabled="savingKey === item.key"
+            class="setting-input setting-input--wide"
+            clearable
+            @blur="onChange(item)"
+          />
           <t-input
             v-else
             v-model="editValues[item.key]"
@@ -859,6 +879,12 @@ const SETTINGS_SECTION_KEYS: Record<Exclude<SettingsSection, 'other'>, readonly 
     'asynq.shared_concurrency',
     'asynq.wiki_concurrency',
     'model.max_concurrency',
+    // Default batch-parse mode for /batch-reparse. "parallel" submits
+    // to the regular core queue (fast, but bursts upstream RPM);
+    // "serial" submits to a dedicated single-worker queue so one
+    // document fully completes before the next starts. The per-batch
+    // dialog override in 批量解析 takes precedence.
+    'parser.batch_reparse_mode',
   ],
   security: ['ssrf.whitelist'],
   users: [],

@@ -608,6 +608,22 @@ export default {
     batchReparseSuccess: "재구축 작업 {count}개가 제출되었습니다",
     batchReparseFailed: "일괄 재구축 실패",
     batchReparseSkippedInFlight: "파싱 중인 문서 {count}개를 건너뛰었습니다",
+    batchParse: "일괄 파싱",
+    batchParseTooltip: "선택 항목의 미파싱 문서 {count}개에 대해 파싱을 시작합니다",
+    batchParseDisabledHint: "미파싱 또는 대기 중인 문서에서만 사용 가능합니다",
+    batchParseNoEligible: "선택한 문서 중 파싱 가능한 항목이 없습니다",
+    batchParseSkippedNotEligible: "미파싱 상태가 아닌 문서 {count}개를 건너뛰었습니다",
+    batchParseSuccess: "파싱 작업 {count}개가 시작되었습니다",
+    batchParseFailed: "일괄 파싱 실패",
+    // 일괄 파싱 모드 선택 대화상자("일괄 파싱" 버튼과 함께 사용)
+    batchParseModeTitle: "일괄 파싱 모드 선택",
+    batchParseModeLabel: "파싱 모드",
+    batchParseModeHint: "엄격 직렬: 한 문서 파싱이 완전히 끝난 후 다음 문서 시작 — 엄격한 업스트림 RPM 제한 환경에 권장. 병렬: 기본 동시성을 사용해 빠르지만 업스트림 RPM을 폭주시킬 수 있습니다.",
+    batchParseModeParallel: "병렬(기본값)",
+    batchParseModeSerial: "엄격 직렬",
+    batchParseModeUseDefault: "시스템 기본값 사용",
+    batchParseModeUseDefaultHint: "시스템 설정 parser.batch_reparse_mode의 현재 값으로 제출",
+    batchParseConfirm: "파싱 시작",
     statusCompleted: "완료",
     statusProcessing: "처리 중",
     statusFinalizing: "최적화 중",
@@ -666,6 +682,7 @@ export default {
     parseStatusFailed: "실패",
     parseStatusCancelled: "취소됨",
     parseStatusDraft: "초안",
+    parseStatusUploaded: "미파싱",
     sourceFilter: "출처",
     allSources: "모든 출처",
     sourceWeb: "웹",
@@ -765,6 +782,9 @@ export default {
     manualSource: "게시할 문서",
     editUrl: "URL 수정",
     manualCharCount: "{count}자",
+    autoParseLabel: "업로드 후 즉시 파싱",
+    autoParseOn: "즉시 파싱 대기열에 추가",
+    autoParseOff: "저장만, 스케줄러가 순차 파싱",
   },
   knowledgeStages: {
     processConfig: {
@@ -2755,6 +2775,10 @@ export default {
         model: {
           max_concurrency: "모델 기본 동시 처리 상한",
         },
+        parser: {
+          pipeline_size: "파서 파이프라인 크기",
+          batch_reparse_mode: "일괄 파싱 모드",
+        },
       },
       keyDescriptions: {
         auth: {
@@ -2790,6 +2814,17 @@ export default {
           max_concurrency:
             "백그라운드 작업(문서 색인/보강)이 단일 모델에 대해 갖는 기본 동시 호출 상한이며, 모델 ID 기준으로 모든 복제본이 공유합니다. 매 호출마다 실시간으로 읽고 재시작 없이 즉시 적용됩니다. 0 또는 음수는 기본 상한을 해제합니다(각 모델은 모델 관리에서 설정한 자체 상한을 계속 준수함). 백그라운드 작업에만 영향을 주며 대화형 채팅에는 영향을 주지 않습니다.",
         },
+        parser: {
+          pipeline_size:
+            "내장 파서 스케줄러가 auto_parse=false 업로드 문서(`uploaded`)를 가져올 때 동시에 처리할 수 있는 상한입니다. " +
+            "스케줄러는 현재 in-flight(processing + finalizing) 수를 세고, 한도에 도달하면 새 파싱을 시작하지 않습니다. " +
+            "매 폴링마다 실시간으로 읽어 다음 폴링에 적용되며 서비스 재시작이 필요 없습니다. 0 또는 음수는 스케줄러를 비활성화하며 " +
+            "기존 asynq `pending` 문서와 수동 /reparse에는 영향을 주지 않습니다. API 호출이 제한된 환경에서는 1로 유지하는 것을 권장합니다.",
+          batch_reparse_mode:
+            "일괄 파싱 모드. parallel = 기본 core 큐로 제출되어 asynq.core_concurrency만큼 병렬 처리됨(빠름); " +
+            "serial = 전용 core_serial 큐(동시성=1)로 제출되어 한 문서 파싱이 끝난 뒤 다음 문서가 시작됨. " +
+            "엄격한 업스트림 RPM 제한 환경에서 권장됩니다. 일괄 파싱 대화상자의 임시 옵션이 이 설정보다 우선합니다. 저장 즉시 적용되며 재시작은 필요 없습니다.",
+        },
       },
       enumLabels: {
         auth: {
@@ -2800,6 +2835,12 @@ export default {
           default_tenant_mode: {
             create_personal: "개인 공간 자동 생성",
             tenantless: "공간을 자동 생성하지 않음",
+          },
+        },
+        parser: {
+          batch_reparse_mode: {
+            parallel: "병렬(기본값)",
+            serial: "엄격 직렬",
           },
         },
       },
@@ -3742,6 +3783,7 @@ export default {
       processing: "인덱싱 및 파싱",
       data: "스토리지 및 데이터",
       integration: "게시 및 통합",
+      scheduledRebuild: "예약 재구축",
     },
     sidebar: {
       basic: "기본 정보",
@@ -3755,6 +3797,7 @@ export default {
       multimodal: "이미지 처리",
       asr: "오디오",
       share: "공유관리",
+      scheduledRebuild: "예약 재구축",
       storage: "스토리지 엔진",
       datasource: "데이터 소스",
       indexing: "인덱싱 전략",
@@ -5352,6 +5395,29 @@ export default {
       unavailableHint:
         "바인딩된 벡터 스토어가 현재 사용할 수 없는 상태입니다. 설정 → 벡터 스토어에서 연결 상태를 확인하세요.",
       goGlobalSettings: "벡터 스토어 설정으로 이동",
+    },
+    scheduledRebuild: {
+      title: "예약 재구축",
+      description: "이 지식베이스의 정기 재구축 주기를 개별적으로 설정합니다.",
+      enabledLabel: "예약 재구축 사용",
+      enabledDesc: "조건에 맞는 문서를 주기적으로 확인하고 다시 제출합니다.",
+      modeLabel: "스케줄 모드",
+      modeDesc: "스케줄러가 재구축을 어떤 방식으로 트리거할지 선택합니다. 동기는 이전 문서가 종료 상태에 도달한 뒤에만 다음 문서를 처리하고, 비동기는 이전 진행 상태와 무관하게 간격마다 실행합니다.",
+      modeOptionSync: "동기",
+      modeOptionAsync: "비동기",
+      modeDescSync: "동기: 문서 하나가 재구축 대상으로 트리거되면 그 상태를 기록합니다. 다음 스캔 시에는 이전 문서가 완료/실패/취소/삭제 등 종료 상태가 된 뒤에만 다음 문서를 처리합니다.",
+      modeDescAsync: "비동기: 이전 작업이 끝났는지와 무관하게 매 스캔에서 batch_size 개까지 재구축을 제출합니다. 대량 재처리에 적합합니다.",
+      intervalLabel: "스캔 주기",
+      intervalDesc: "지식베이스를 스캔하는 간격(초)입니다.",
+      batchLabel: "실행당 문서 수",
+      batchDesc: "한 번의 스캔에서 제출할 최대 문서 수입니다. 동기 모드에서는 1 로 제한됩니다.",
+      statusesLabel: "스캔 상태",
+      statusesDesc: "예약 재구축 대상 파싱 상태입니다.",
+      lastTriggeredTitle: "최근 트리거된 문서",
+      lastTriggeredName: "문서 이름",
+      lastTriggeredAt: "트리거 시간",
+      lastTriggeredInFlightTip: "안내: 해당 문서는 아직 처리 중입니다. 동기 모드에서는 이 문서가 종료 상태에 도달할 때까지 KB 전체 스캔이 건너뛰어 집니다.",
+      lastTriggeredEmpty: "아직 트리거된 문서가 없습니다.",
     },
     storage: {
       title: '스토리지 엔진',

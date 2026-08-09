@@ -923,6 +923,11 @@ func (s *DataSourceService) ingestItem(ctx context.Context, ds *types.DataSource
 		if err != nil {
 			return isUpdate, fmt.Errorf("build file header: %w", err)
 		}
+		// Datasource ingestion is a background batch flow. Pass autoParse=nil
+		// (legacy behavior: parse immediately) to keep parity with the
+		// historical code path. If a future operator policy wants to defer
+		// datasource ingestion to the parser scheduler, this is the single
+		// point to change.
 		_, err = s.knowledgeService.CreateKnowledgeFromFile(
 			ctx,
 			ds.KnowledgeBaseID,
@@ -933,12 +938,14 @@ func (s *DataSourceService) ingestItem(ctx context.Context, ds *types.DataSource
 			tagIDs,        // auto-tag from data source
 			channel,
 			nil,
+			nil, // autoParse: legacy default (true) — see comment above
 		)
 		return isUpdate, err
 	}
 
 	// Case 2: only a remote URL — let WeKnora handle downloading and parsing
 	if item.URL != "" {
+		// Datasource ingestion: legacy default (autoParse=nil → true).
 		_, err := s.knowledgeService.CreateKnowledgeFromURL(
 			ctx,
 			ds.KnowledgeBaseID,
@@ -949,7 +956,8 @@ func (s *DataSourceService) ingestItem(ctx context.Context, ds *types.DataSource
 			item.Title,
 			tagIDs, // auto-tag from data source
 			channel,
-			nil,
+			nil, // processOverrides
+			nil, // autoParse: legacy default (true) — see comment above
 		)
 		return isUpdate, err
 	}

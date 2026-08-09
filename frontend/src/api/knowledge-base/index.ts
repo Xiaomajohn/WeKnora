@@ -104,9 +104,25 @@ export function getKnowledgeBaseById(id: string, options?: { agent_id?: string }
   return get(qs ? `/api/v1/knowledge-bases/${id}?${qs}` : `/api/v1/knowledge-bases/${id}`);
 }
 
+export interface ScheduledRebuildConfig {
+  enabled: boolean;
+  interval_seconds: number;
+  batch_size: number;
+  statuses: string[];
+  // 同步/异步模式：sync 触发一篇后等该文档进入终态才处理下一篇；
+  // async 按间隔与 batch_size 照常触发，与上一次的进度无关。
+  mode?: 'sync' | 'async';
+  // sync 模式下记录上一次触发的文档，用于同步门控 + KB 编辑面板展示。
+  // JSONB 持久化字段，可选；后端在 Modernize/EnsureDefaults 中会填默认值。
+  last_triggered_knowledge_id?: string;
+  last_triggered_knowledge_name?: string;
+  last_triggered_at?: string | null;
+}
+
 export function updateKnowledgeBase(id: string, data: {
   name: string;
   description?: string;
+  scheduled_rebuild_config?: ScheduledRebuildConfig | null;
   config?: {
     chunking_config?: any;
     image_processing_config?: any;
@@ -171,6 +187,9 @@ export function togglePinKnowledgeBase(id: string) {
 
 // 知识文件 API（基于具体知识库）
 // data.tag_ids: 可选，指定知识所属的多个标签 ID
+// data.auto_parse: 可选，true/false/null；缺省/null 表示后端默认（true = 上传即解析）。
+//   false 时文件落到存储后停在 `uploaded` 状态，只能由用户手动 /reparse
+//   或 KB 级定时重建调度器推进；平台内置的 parser scheduler 已删除。
 export function uploadKnowledgeFile(
   kbId: string,
   data: {
@@ -178,6 +197,7 @@ export function uploadKnowledgeFile(
     tag_ids?: string[]
     fileName?: string
     process_config?: KnowledgeProcessOverrides | string
+    auto_parse?: boolean | null
     [key: string]: any
   } = { file: new File([], '') },
   onProgress?: (progressEvent: any) => void,
@@ -186,6 +206,12 @@ export function uploadKnowledgeFile(
   Object.keys(data).forEach(key => {
     const value = data[key];
     if (value === undefined) return;
+    if (key === 'auto_parse' && typeof value === 'boolean') {
+      // Only emit the form field when explicitly set; backend treats
+      // missing/empty as true, so we don't want to override that.
+      formData.append(key, value ? 'true' : 'false');
+      return;
+    }
     if (key === 'tag_ids' && Array.isArray(value)) {
       formData.append(key, value.join(','));
     } else if (key === 'process_config' && value && typeof value !== 'string') {
@@ -199,15 +225,23 @@ export function uploadKnowledgeFile(
 
 // 从URL创建知识
 // data.tag_ids: 可选，指定知识所属的多个标签 ID
+// data.auto_parse: 可选；true = URL 抓取后立即解析（默认），false = 仅入库不入队
 export function createKnowledgeFromURL(
   kbId: string,
-  data: { url: string; enable_multimodel?: boolean; tag_ids?: string[]; process_config?: KnowledgeProcessOverrides },
+  data: {
+    url: string
+    enable_multimodel?: boolean
+    tag_ids?: string[]
+    process_config?: KnowledgeProcessOverrides
+    auto_parse?: boolean | null
+  },
 ) {
   return post(`/api/v1/knowledge-bases/${kbId}/knowledge/url`, data);
 }
 
 // 手工创建知识
 // data.tag_ids: 可选，指定知识所属的标签 ID
+// data.auto_parse: 可选；true = 手动创建后立即解析（默认），false = 仅入库不入队
 export function createManualKnowledge(
   kbId: string,
   data: {
@@ -216,6 +250,7 @@ export function createManualKnowledge(
     status: string
     tag_ids?: string[]
     process_config?: KnowledgeProcessOverrides
+    auto_parse?: boolean | null
   },
 ) {
   return post(`/api/v1/knowledge-bases/${kbId}/knowledge/manual`, data);
@@ -494,10 +529,23 @@ export function knowledgeSemanticSearch(data: {
   return post('/api/v1/knowledge-search', data);
 }
 
-export function batchReparseKnowledge(kbId: string, ids: string[], processConfig?: KnowledgeProcessOverrides) {
+export function batchReparseKnowledge(
+  kbId: string,
+  ids: string[],
+  processConfig?: KnowledgeProcessOverrides,
+  // Strict-serial mode: when true the backend enqueues each
+  // document:process task to the dedicated core_serial single-worker
+  // queue so the batch runs strictly one-at-a-time (one document
+  // fully completes, then the next starts). When undefined the
+  // server falls back to the parser.batch_reparse_mode system
+  // setting (default "parallel"). `true`/`false` overrides the
+  // setting on a per-batch basis.
+  serial?: boolean,
+) {
   return post(`/api/v1/knowledge/batch-reparse`, {
     kb_id: kbId,
     ids,
     process_config: processConfig,
+    serial,
   });
 }

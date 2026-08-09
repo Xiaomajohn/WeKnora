@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS knowledge_bases (
     asr_config TEXT,
     vector_store_id VARCHAR(36),
     creator_id VARCHAR(36),
+    scheduled_rebuild_config TEXT NULL DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     deleted_at DATETIME

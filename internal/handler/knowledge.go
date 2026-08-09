@@ -38,6 +38,12 @@ type KnowledgeHandler struct {
 	agentShareService interfaces.AgentShareService
 	asynqClient       interfaces.TaskEnqueuer
 	spanRepo          repository.KnowledgeSpanRepository
+	// systemSettingSvc resolves the parser.batch_reparse_mode default
+	// when /batch-reparse does not receive an explicit `serial` field.
+	// Optional: when nil, the handler falls back to the hard-coded
+	// "parallel" default (same as the registry), so missing wiring is
+	// safe — just not configurable.
+	systemSettingSvc interfaces.SystemSettingService
 }
 
 // NewKnowledgeHandler creates a new knowledge handler instance
@@ -49,6 +55,7 @@ func NewKnowledgeHandler(
 	agentShareService interfaces.AgentShareService,
 	asynqClient interfaces.TaskEnqueuer,
 	spanRepo repository.KnowledgeSpanRepository,
+	systemSettingSvc interfaces.SystemSettingService,
 ) *KnowledgeHandler {
 	return &KnowledgeHandler{
 		cfg:               cfg,
@@ -58,6 +65,7 @@ func NewKnowledgeHandler(
 		agentShareService: agentShareService,
 		asynqClient:       asynqClient,
 		spanRepo:          spanRepo,
+		systemSettingSvc:  systemSettingSvc,
 	}
 }
 
@@ -266,13 +274,23 @@ func (h *KnowledgeHandler) enqueueKnowledgeListDelete(
 
 // enqueueKnowledgeListReparse enqueues an async batch-reparse task for the
 // given knowledge IDs and returns the asynq task ID.
+//
+// `serial` controls whether the maintenance worker (and ultimately the
+// per-document document:process tasks it spawns) run through the dedicated
+// QueueCoreSerial single-worker lane ("true") or the normal core queue
+// ("false"). When the caller passes the system default (see
+// resolveBatchReparseSerial), this matches what the operator set in
+// SystemSettings; when the caller is the user-facing API and the request
+// carries an explicit value, that overrides the setting.
 func (h *KnowledgeHandler) enqueueKnowledgeListReparse(
-	ctx context.Context, tenantID uint64, ids []string, processConfig *types.KnowledgeProcessOverrides,
+	ctx context.Context, tenantID uint64, ids []string,
+	processConfig *types.KnowledgeProcessOverrides, serial bool,
 ) (string, error) {
 	payload := types.KnowledgeListReparsePayload{
 		TenantID:      tenantID,
 		KnowledgeIDs:  ids,
 		ProcessConfig: processConfig,
+		Serial:        serial,
 	}
 	langfuse.InjectTracing(ctx, &payload)
 	payloadBytes, err := json.Marshal(payload)
@@ -280,12 +298,39 @@ func (h *KnowledgeHandler) enqueueKnowledgeListReparse(
 		return "", fmt.Errorf("marshal payload: %w", err)
 	}
 	task := asynq.NewTask(types.TypeKnowledgeListReparse, payloadBytes,
-		asynq.Queue(types.QueueMaintenance), asynq.MaxRetry(3), asynq.Timeout(time.Hour))
+		asynq.Queue(types.QueueMaintenance), asynq.MaxRetry(3), asynq.Timeout(7*24*time.Hour))
 	info, err := h.asynqClient.Enqueue(task)
 	if err != nil {
 		return "", fmt.Errorf("enqueue task: %w", err)
 	}
 	return info.ID, nil
+}
+
+// resolveBatchReparseSerial resolves the effective serial flag for a
+// /batch-reparse request. Priority:
+//
+//  1. Caller's request.Serial (the per-batch UI override).
+//  2. parser.batch_reparse_mode system setting ("serial" → true).
+//  3. Hard-coded default "parallel" (false).
+//
+// The function is safe to call with a nil systemSettingSvc (returns
+// the default), so missing wiring degrades gracefully. The chosen
+// boolean is also logged so operators can correlate an enqueue with
+// the resulting queue.
+func (h *KnowledgeHandler) resolveBatchReparseSerial(ctx context.Context, override *bool) bool {
+	if override != nil {
+		return *override
+	}
+	if h.systemSettingSvc == nil {
+		return false
+	}
+	mode := h.systemSettingSvc.GetString(
+		ctx,
+		"parser.batch_reparse_mode",
+		"WEKNORA_PARSER_BATCH_REPARSE_MODE",
+		"parallel",
+	)
+	return strings.EqualFold(strings.TrimSpace(mode), "serial")
 }
 
 // CreateKnowledgeFromFile godoc
@@ -404,8 +449,25 @@ func (h *KnowledgeHandler) CreateKnowledgeFromFile(c *gin.Context) {
 
 	channel := c.PostForm("channel")
 
+	// Optional auto_parse flag. Defaults to true so existing API clients
+	// keep working untouched. Set auto_parse=false to store the file but
+	// skip the asynq enqueue — the document stays in the "uploaded" state
+	// until the user calls /reparse manually (single or /batch-reparse),
+	// or the per-KB scheduled_rebuild scheduler picks it up. No
+	// background process auto-promotes uploaded rows.
+	var autoParse *bool
+	if raw := c.PostForm("auto_parse"); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			logger.Error(ctx, "Failed to parse auto_parse", err)
+			c.Error(errors.NewBadRequestError("Invalid auto_parse format").WithDetails(err.Error()))
+			return
+		}
+		autoParse = &parsed
+	}
+
 	// Create knowledge entry from the file
-	knowledge, err := h.kgService.CreateKnowledgeFromFile(ctx, kbID, file, metadata, enableMultimodel, customFileName, tagIDs, channel, processOverrides)
+	knowledge, err := h.kgService.CreateKnowledgeFromFile(ctx, kbID, file, metadata, enableMultimodel, customFileName, tagIDs, channel, processOverrides, autoParse)
 	// Check for duplicate knowledge error
 	if err != nil {
 		if h.handleDuplicateKnowledgeError(c, err, knowledge, "file") {
@@ -474,6 +536,10 @@ func (h *KnowledgeHandler) CreateKnowledgeFromURL(c *gin.Context) {
 		TagIDs           []string                         `json:"tag_ids"`
 		Channel          string                           `json:"channel"`
 		ProcessConfig    *types.KnowledgeProcessOverrides `json:"process_config"`
+		// AutoParse defaults to true (legacy behavior). Set false to store
+		// the URL but skip enqueueing a parse task; the in-process parser
+		// scheduler or a manual /reparse will start processing later.
+		AutoParse *bool `json:"auto_parse"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Error(ctx, "Failed to parse URL request", err)
@@ -502,7 +568,7 @@ func (h *KnowledgeHandler) CreateKnowledgeFromURL(c *gin.Context) {
 
 	// Create knowledge entry from the URL
 	knowledge, err := h.kgService.CreateKnowledgeFromURL(
-		ctx, kbID, req.URL, req.FileName, req.FileType, req.EnableMultimodel, req.Title, req.TagIDs, req.Channel, req.ProcessConfig,
+		ctx, kbID, req.URL, req.FileName, req.FileType, req.EnableMultimodel, req.Title, req.TagIDs, req.Channel, req.ProcessConfig, req.AutoParse,
 	)
 	// Check for duplicate knowledge error
 	if err != nil {
@@ -568,7 +634,24 @@ func (h *KnowledgeHandler) CreateManualKnowledge(c *gin.Context) {
 		return
 	}
 
-	knowledge, err := h.kgService.CreateKnowledgeFromManual(ctx, kbID, &req, req.Channel)
+	// AutoParse defaults to true (legacy behavior). Set false to save the
+	// manual draft but skip enqueueing a parse task. Accepted either as
+	// a JSON body field (preferred, used by the web UI) or a query
+	// parameter (kept for API compatibility with older callers); the
+	// JSON value wins when both are present.
+	var autoParse *bool
+	if req.AutoParse != nil {
+		autoParse = req.AutoParse
+	} else if raw := c.Query("auto_parse"); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			c.Error(errors.NewBadRequestError("Invalid auto_parse format").WithDetails(err.Error()))
+			return
+		}
+		autoParse = &parsed
+	}
+
+	knowledge, err := h.kgService.CreateKnowledgeFromManual(ctx, kbID, &req, req.Channel, autoParse)
 	if err != nil {
 		if appErr, ok := errors.IsAppError(err); ok {
 			c.Error(appErr)
@@ -1658,11 +1741,17 @@ func (h *KnowledgeHandler) ReparseKnowledge(c *gin.Context) {
 	}
 
 	// Optional per-reparse parse config override. Empty body keeps the
-	// overrides stored at upload time.
+	// overrides stored at upload time. The `serial` flag (default
+	// false) routes the resulting document:process task to the
+	// dedicated single-worker QueueCoreSerial pool so a single
+	// per-document reparse can also opt into strict-serial mode
+	// without going through /batch-reparse.
 	var processOverrides *types.KnowledgeProcessOverrides
+	serial := false
 	if c.Request.ContentLength != 0 {
 		var req struct {
 			ProcessConfig *types.KnowledgeProcessOverrides `json:"process_config"`
+			Serial        bool                             `json:"serial"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			logger.Error(ctx, "Failed to parse reparse request body", err)
@@ -1670,10 +1759,20 @@ func (h *KnowledgeHandler) ReparseKnowledge(c *gin.Context) {
 			return
 		}
 		processOverrides = req.ProcessConfig
+		serial = req.Serial
 	}
 
-	// Call service to reparse knowledge
-	knowledge, err := h.kgService.ReparseKnowledge(effCtx, id, processOverrides)
+	// Call service to reparse knowledge. KB config is the single source of
+	// truth on the reparse path: any overrides persisted on the document
+	// metadata from earlier uploads are stale by definition once the
+	// operator updates the KB, so we always force useKBConfigOnly=true.
+	// The handler still accepts a request-body process_config for the rare
+	// case where the operator wants a one-shot override, but when the
+	// caller doesn't supply one we pass useKBConfigOnly=true explicitly so
+	// the implementation also scrubs the metadata override (defence in
+	// depth against the documented "stale override" failure mode where
+	// the document row was uploaded under a previous KB config).
+	knowledge, err := h.kgService.ReparseKnowledge(effCtx, id, processOverrides, serial, true)
 	if err != nil {
 		if appErr, ok := errors.IsAppError(err); ok {
 			c.Error(appErr)
@@ -2381,6 +2480,13 @@ type batchReparseKnowledgeRequest struct {
 	KBID          string                           `json:"kb_id" binding:"required"`
 	IDs           []string                         `json:"ids" binding:"required"`
 	ProcessConfig *types.KnowledgeProcessOverrides `json:"process_config,omitempty"`
+	// Serial routes each document:process task through the strict
+	// single-worker QueueCoreSerial pool so the batch runs
+	// one-at-a-time. When nil, the handler falls back to the
+	// parser.batch_reparse_mode system setting (and finally to
+	// "parallel"). Each user-click thus has a deterministic answer
+	// without the worker having to re-read the registry.
+	Serial *bool `json:"serial,omitempty"`
 }
 
 // BatchReparseKnowledge godoc
@@ -2460,15 +2566,16 @@ func (h *KnowledgeHandler) BatchReparseKnowledge(c *gin.Context) {
 		}
 	}
 
-	taskID, err := h.enqueueKnowledgeListReparse(ctx, effectiveTenantID, ids, req.ProcessConfig)
+	serial := h.resolveBatchReparseSerial(ctx, req.Serial)
+	taskID, err := h.enqueueKnowledgeListReparse(ctx, effectiveTenantID, ids, req.ProcessConfig, serial)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to enqueue batch knowledge reparse task: %v", err)
 		c.Error(errors.NewInternalServerError("Failed to enqueue batch reparse task"))
 		return
 	}
 
-	logger.Infof(ctx, "Batch knowledge reparse task enqueued: %s, kb_id: %s, count: %d",
-		taskID, secutils.SanitizeForLog(kbID), len(ids))
+	logger.Infof(ctx, "Batch knowledge reparse task enqueued: %s, kb_id: %s, count: %d, serial=%t",
+		taskID, secutils.SanitizeForLog(kbID), len(ids), serial)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -2476,6 +2583,7 @@ func (h *KnowledgeHandler) BatchReparseKnowledge(c *gin.Context) {
 		"data": gin.H{
 			"task_id":       taskID,
 			"reparse_count": len(ids),
+			"serial":        serial,
 		},
 	})
 }

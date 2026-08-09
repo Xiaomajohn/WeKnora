@@ -1966,10 +1966,22 @@ func (s *knowledgeService) generateQuestionsWithContext(ctx context.Context,
 
 // ReparseKnowledge deletes existing document content and re-parses the knowledge asynchronously.
 // This method reuses the logic from UpdateManualKnowledge for resource cleanup and async parsing.
+//
+// `serial` controls which asynq queue the resulting document:process /
+// manual:process task lands on:
+//   - false (default): the normal core queue, where the 8-worker core
+//     pool processes tasks concurrently. Fast but bursts upstream
+//     embedding RPM.
+//   - true: the dedicated QueueCoreSerial single-worker pool so the task
+//     runs strictly one at a time. Used by the /batch-reparse strict-
+//     serial path so a batch completes one document, then starts the
+//     next.
 func (s *knowledgeService) ReparseKnowledge(
 	ctx context.Context,
 	knowledgeID string,
 	processOverrides *types.KnowledgeProcessOverrides,
+	serial bool,
+	useKBConfigOnly bool,
 ) (*types.Knowledge, error) {
 	logger.Info(ctx, "Start re-parsing knowledge")
 
@@ -1998,6 +2010,32 @@ func (s *knowledgeService) ReparseKnowledge(
 	if err != nil {
 		logger.Errorf(ctx, "Failed to get knowledge base for reparse: %v", err)
 		return nil, err
+	}
+
+	// KB-config-only mode: ignore both the caller's processOverrides and any
+	// overrides persisted in the document metadata from earlier uploads, and
+	// scrub them from metadata so subsequent reparses (e.g. another scheduled
+	// tick) cannot resurrect them. This is the contract for the scheduled
+	// rebuild scheduler and the manual reparse handlers — KB config is the
+	// single source of truth and must always win over stale per-document state.
+	if useKBConfigOnly {
+		if processOverrides != nil {
+			logger.Infof(ctx,
+				"[Reparse] useKBConfigOnly=true: dropping caller-supplied processOverrides for knowledge %s",
+				secutils.SanitizeForLog(knowledgeID))
+			processOverrides = nil
+		}
+		storedOverrides, _ := existing.ProcessOverrides()
+		if storedOverrides != nil {
+			logger.Infof(ctx,
+				"[Reparse] useKBConfigOnly=true: clearing persisted process_overrides from metadata for knowledge %s",
+				secutils.SanitizeForLog(knowledgeID))
+			if err := existing.SetProcessOverrides(nil); err != nil {
+				logger.Warnf(ctx, "[Reparse] Failed to clear persisted process overrides: %v", err)
+			} else if err := s.repo.UpdateKnowledgeColumn(ctx, existing.ID, "metadata", existing.Metadata); err != nil {
+				logger.Warnf(ctx, "[Reparse] Failed to persist cleared process overrides: %v", err)
+			}
+		}
 	}
 
 	// When the caller supplies new overrides (e.g. via the reparse confirm
@@ -2061,7 +2099,7 @@ func (s *knowledgeService) ReparseKnowledge(
 			return nil, err
 		}
 
-		if err := s.enqueueManualProcessing(ctx, existing, meta.Content, true); err != nil {
+		if err := s.enqueueManualProcessing(ctx, existing, meta.Content, true, serial); err != nil {
 			logger.Errorf(ctx, "Failed to enqueue manual reparse task: %v", err)
 			existing.ParseStatus = "failed"
 			existing.ErrorMessage = "Failed to enqueue processing task"
@@ -2104,6 +2142,21 @@ func (s *knowledgeService) ReparseKnowledge(
 	// Step 3: Trigger async re-parsing based on knowledge type
 	logger.Infof(ctx, "Knowledge status updated, scheduling async reparse, ID: %s, Type: %s", existing.ID, existing.Type)
 
+	// pickQueue returns the asynq queue name for a document:process
+	// reparse. Strict-serial mode routes through QueueCoreSerial (a
+	// dedicated single-worker pool) so the maintenance worker, which
+	// already iterates IDs serially, achieves a true end-to-end
+	// one-at-a-time execution: one document fully completes, then the
+	// next begins. The same task type is reused so the existing
+	// ProcessDocument handler picks it up on whichever pool subscribes
+	// to the chosen queue.
+	pickQueue := func() string {
+		if serial {
+			return types.QueueCoreSerial
+		}
+		return types.QueueDefault
+	}
+
 	// For file-based knowledge, enqueue document processing task
 	if existing.FilePath != "" {
 		tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
@@ -2140,14 +2193,14 @@ func (s *knowledgeService) ReparseKnowledge(
 		task := asynq.NewTask(
 			types.TypeDocumentProcess,
 			payloadBytes,
-			documentProcessTaskOptions(s.config, asynq.MaxRetry(3))...,
+			documentProcessTaskOptions(s.config, asynq.Queue(pickQueue()), asynq.MaxRetry(3))...,
 		)
 		info, err := s.task.Enqueue(task)
 		if err != nil {
 			logger.Errorf(ctx, "Failed to enqueue reparse task: %v", err)
 			return existing, nil
 		}
-		logger.Infof(ctx, "Enqueued reparse task: id=%s queue=%s knowledge_id=%s", info.ID, info.Queue, existing.ID)
+		logger.Infof(ctx, "Enqueued reparse task: id=%s queue=%s knowledge_id=%s serial=%t", info.ID, info.Queue, existing.ID, serial)
 
 		// For data tables (csv, xlsx, xls), also enqueue summary task
 		if slices.Contains([]string{"csv", "xlsx", "xls"}, getFileType(existing.FileName)) {
@@ -2193,14 +2246,14 @@ func (s *knowledgeService) ReparseKnowledge(
 		task := asynq.NewTask(
 			types.TypeDocumentProcess,
 			payloadBytes,
-			documentProcessTaskOptions(s.config)...,
+			documentProcessTaskOptions(s.config, asynq.Queue(pickQueue()))...,
 		)
 		info, err := s.task.Enqueue(task)
 		if err != nil {
 			logger.Errorf(ctx, "Failed to enqueue file URL reparse task: %v", err)
 			return existing, nil
 		}
-		logger.Infof(ctx, "Enqueued file URL reparse task: id=%s queue=%s knowledge_id=%s", info.ID, info.Queue, existing.ID)
+		logger.Infof(ctx, "Enqueued file URL reparse task: id=%s queue=%s knowledge_id=%s serial=%t", info.ID, info.Queue, existing.ID, serial)
 
 		return existing, nil
 	}
@@ -2239,14 +2292,14 @@ func (s *knowledgeService) ReparseKnowledge(
 		task := asynq.NewTask(
 			types.TypeDocumentProcess,
 			payloadBytes,
-			documentProcessTaskOptions(s.config, asynq.MaxRetry(3))...,
+			documentProcessTaskOptions(s.config, asynq.Queue(pickQueue()), asynq.MaxRetry(3))...,
 		)
 		info, err := s.task.Enqueue(task)
 		if err != nil {
 			logger.Errorf(ctx, "Failed to enqueue URL reparse task: %v", err)
 			return existing, nil
 		}
-		logger.Infof(ctx, "Enqueued URL reparse task: id=%s queue=%s knowledge_id=%s", info.ID, info.Queue, existing.ID)
+		logger.Infof(ctx, "Enqueued URL reparse task: id=%s queue=%s knowledge_id=%s serial=%t", info.ID, info.Queue, existing.ID, serial)
 
 		return existing, nil
 	}
@@ -2749,8 +2802,14 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 	}
 
 	// 检查是否有部分处理（有chunks但状态不是completed）
-	if knowledge.ParseStatus != "completed" && knowledge.ParseStatus != "pending" &&
-		knowledge.ParseStatus != "processing" {
+	// Allowed pre-parse states include "uploaded" — documents persisted via
+	// auto_parse=false. They are dormant until the parser scheduler picks
+	// them up or the user calls /reparse. From the worker's perspective they
+	// are equivalent to "pending" (just enter the parse pipeline).
+	if knowledge.ParseStatus != types.ParseStatusCompleted &&
+		knowledge.ParseStatus != types.ParseStatusPending &&
+		knowledge.ParseStatus != types.ParseStatusProcessing &&
+		knowledge.ParseStatus != types.ParseStatusUploaded {
 		// 状态异常，记录日志但继续处理
 		logger.Warnf(ctx, "Unexpected parse status: %s for knowledge: %s", knowledge.ParseStatus, payload.KnowledgeID)
 	}
@@ -3419,16 +3478,54 @@ func (s *knowledgeService) ProcessKnowledgeListReparse(ctx context.Context, t *a
 
 	var failed int
 	for _, id := range payload.KnowledgeIDs {
-		if _, err := s.ReparseKnowledge(ctx, id, payload.ProcessConfig); err != nil {
+		// KB config is the single source of truth on the reparse path:
+		// only honour caller-supplied overrides when the operator
+		// actually passed them in the batch request. When the request
+		// omits process_config we also scrub any persisted overrides
+		// from the document metadata so a stale per-document state
+		// (e.g. question_generation_config.enabled=true from a previous
+		// KB config) cannot resurrect work the operator explicitly
+		// disabled. See ReparseKnowledge doc comment for the contract.
+		useKBConfigOnly := payload.ProcessConfig == nil
+		if _, err := s.ReparseKnowledge(ctx, id, payload.ProcessConfig, payload.Serial, useKBConfigOnly); err != nil {
 			logger.Errorf(ctx, "Failed to reparse knowledge %s: %v", id, err)
 			failed++
+			continue
 		}
+		if !payload.Serial {
+			continue
+		}
+
+		// Strict serial means more than using a one-worker queue: the next
+		// knowledge must not even be submitted (and therefore must retain its
+		// previous parse status) until the current knowledge reaches a terminal
+		// state, including all finalizing/enrichment work.
+		for {
+			current, err := s.repo.GetKnowledgeByID(ctx, payload.TenantID, id)
+			if err != nil {
+				logger.Errorf(ctx, "Failed to inspect serial reparse status for knowledge %s: %v", id, err)
+				return err
+			}
+			switch current.ParseStatus {
+			case types.ParseStatusCompleted, types.ParseStatusFailed, types.ParseStatusCancelled:
+				logger.Infof(ctx, "Serial reparse knowledge %s reached terminal status %s", id, current.ParseStatus)
+				goto nextKnowledge
+			}
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+			}
+		}
+
+	nextKnowledge:
 	}
 
 	if failed > 0 {
-		logger.Warnf(ctx, "Knowledge list reparse completed with %d failures out of %d", failed, len(payload.KnowledgeIDs))
+		logger.Warnf(ctx, "Knowledge list reparse completed with %d failures out of %d (serial=%t)", failed, len(payload.KnowledgeIDs), payload.Serial)
 	}
-	logger.Infof(ctx, "Knowledge list reparse task finished: %d submitted, %d failed",
-		len(payload.KnowledgeIDs)-failed, failed)
+	logger.Infof(ctx, "Knowledge list reparse task finished: %d submitted, %d failed, serial=%t",
+		len(payload.KnowledgeIDs)-failed, failed, payload.Serial)
 	return nil
 }

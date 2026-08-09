@@ -33,6 +33,7 @@ import (
 
 	productdocs "github.com/Tencent/WeKnora/docs"
 
+	"github.com/Tencent/WeKnora/internal/application/service"
 	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/container"
 	"github.com/Tencent/WeKnora/internal/logger"
@@ -71,6 +72,9 @@ func main() {
 		router *gin.Engine,
 		resourceCleaner interfaces.ResourceCleaner,
 		systemSettingSvc interfaces.SystemSettingService,
+		kgService interfaces.KnowledgeService,
+		kbService interfaces.KnowledgeBaseService,
+		tenantRepo interfaces.TenantRepository,
 	) error {
 		// Create HTTP server
 		server := &http.Server{
@@ -93,6 +97,14 @@ func main() {
 		if err := systemSettingSvc.SubscribeRedis(ctx); err != nil {
 			logger.Warnf(ctx, "[system_settings] subscribe failed: %v", err)
 		}
+
+		// Start the per-knowledge-base scheduled-rebuild scheduler. Each
+		// document KB owns its interval, batch size, minimum age, and
+		// parse-status allowlist in scheduled_rebuild_config.
+		scheduledRebuildScheduler := service.NewKnowledgeScheduledRebuildScheduler(
+			kgService, kbService.GetRepository(), tenantRepo,
+		)
+		scheduledRebuildScheduler.Start(ctx)
 
 		signals := make(chan os.Signal, 1)
 		signal.Notify(signals, shutdownSignals...)

@@ -91,6 +91,15 @@ type KnowledgeBase struct {
 	// IndexingStrategy controls which indexing pipelines are active for this knowledge base.
 	// Pipelines: vector search, keyword search, wiki generation, knowledge graph extraction.
 	IndexingStrategy IndexingStrategy `yaml:"indexing_strategy"       json:"indexing_strategy"       gorm:"column:indexing_strategy;type:json"`
+	// ScheduledRebuildConfig drives the in-process scheduled-rebuild
+	// scheduler (knowledge_scheduled_rebuild.go). NULL = feature
+	// disabled for this KB; the scheduler skips the row entirely. When
+	// non-nil, the scheduler periodically picks documents whose
+	// parse_status matches `Statuses` and re-submits them through
+	// ReparseKnowledge — see ScheduledRebuildConfig for the per-field
+	// semantics. Replaces the legacy global parser.auto_repair_* system
+	// settings, which were too coarse to allow per-KB tuning.
+	ScheduledRebuildConfig *ScheduledRebuildConfig `yaml:"scheduled_rebuild_config" json:"scheduled_rebuild_config" gorm:"column:scheduled_rebuild_config;type:jsonb"`
 	// IsPinned and PinnedAt are computed per-caller from user_kb_pins
 	// (see migration 000050). They used to be stored on the row itself,
 	// which made pinning a workspace-wide ordering decision gated behind
@@ -125,19 +134,34 @@ type KnowledgeBase struct {
 	CreatorName string `yaml:"-"                       json:"creator_name,omitempty"  gorm:"-"`
 }
 
-// KnowledgeBaseConfig represents the knowledge base configuration
+// KnowledgeBaseConfig represents the knowledge base configuration.
+//
+// ChunkingConfig / ImageProcessingConfig are pointer fields so the Update
+// DTO can distinguish "caller didn't send the subtree" (nil → no change)
+// from "caller sent a zero-value subtree" (non-nil but empty → intentional
+// reset). service.UpdateKnowledgeBase relies on this distinction to avoid
+// silently wiping an existing chunking config when an edit payload only
+// touches e.g. indexing_strategy.
 type KnowledgeBaseConfig struct {
-	// Chunking configuration
-	ChunkingConfig ChunkingConfig `yaml:"chunking_config"         json:"chunking_config"`
-	// Image processing configuration
-	ImageProcessingConfig ImageProcessingConfig `yaml:"image_processing_config" json:"image_processing_config"`
-	// FAQ configuration (only for FAQ type knowledge bases)
-	FAQConfig *FAQConfig `yaml:"faq_config"              json:"faq_config"`
-	// Wiki configuration (only for wiki-enabled knowledge bases)
-	WikiConfig *WikiConfig `yaml:"wiki_config"             json:"wiki_config"`
+	// Chunking configuration. nil = leave existing column untouched.
+	ChunkingConfig *ChunkingConfig `yaml:"chunking_config"         json:"chunking_config,omitempty"`
+	// Image processing configuration. nil = leave existing column untouched.
+	ImageProcessingConfig *ImageProcessingConfig `yaml:"image_processing_config" json:"image_processing_config,omitempty"`
+	// FAQ configuration (only for FAQ type knowledge bases). nil = no change.
+	FAQConfig *FAQConfig `yaml:"faq_config"              json:"faq_config,omitempty"`
+	// Wiki configuration (only for wiki-enabled knowledge bases). nil = no change.
+	WikiConfig *WikiConfig `yaml:"wiki_config"             json:"wiki_config,omitempty"`
 	// IndexingStrategy controls which indexing pipelines are active.
 	// nil means "no change" when updating (preserves existing strategy).
-	IndexingStrategy *IndexingStrategy `yaml:"indexing_strategy"       json:"indexing_strategy"`
+	IndexingStrategy *IndexingStrategy `yaml:"indexing_strategy"       json:"indexing_strategy,omitempty"`
+	// ScheduledRebuildConfig carries the per-KB scheduled rebuild config
+	// (see ScheduledRebuildConfig). Carried alongside KnowledgeBase so the
+	// UpdateKnowledgeBaseRequest DTO can accept the whole subtree in one
+	// place without inventing a new top-level shape every time the KB save
+	// payload grows. nil means "no change when updating" — the persisted
+	// column on the KB row is left untouched. A non-nil value overwrites
+	// the previous JSONB verbatim.
+	ScheduledRebuildConfig *ScheduledRebuildConfig `yaml:"scheduled_rebuild_config,omitempty" json:"scheduled_rebuild_config,omitempty"`
 }
 
 // ParserEngineRule maps a set of file types to a specific parser engine.
@@ -534,6 +558,146 @@ type FAQConfig struct {
 	QuestionIndexMode FAQQuestionIndexMode `yaml:"question_index_mode" json:"question_index_mode"`
 }
 
+// ScheduledRebuildConfig is the per-KB configuration for the scheduled-
+// rebuild scheduler. Each KB owns an independent copy; the scheduler
+// walks every KB row, filters by Enabled, and runs a tick on each one
+// at its own cadence. All durations are in seconds (the scheduler's
+// polling loop is hardcoded — see knowledge_scheduled_rebuild.go — so
+// the resolution only needs to be fine enough to honor each KB's
+// declared interval).
+//
+// Field semantics:
+//   - Enabled: master switch. When false the scheduler treats the row
+//     as if it didn't exist (same as a NULL pointer on the parent KB).
+//   - IntervalSeconds: how often the scheduler should run a repair tick
+//     on this KB. Read live on every global poll, so a UI edit takes
+//     effect on the *next* iteration without restart. Clamped to
+//     [1s, 24h] by the scheduler; values outside the range are silently
+//     corrected. Default 60.
+//   - BatchSize: how many candidate documents the scheduler promotes
+//     per tick on this KB. Clamped to [1, 32]. Default 1 (matches the
+//     operator's "每次查询一个出来" requirement).
+//   - Statuses: parse_status allowlist. Each entry must be a canonical
+//     Knowledge.parse_status value; the scheduler drops unknowns with a
+//     warning log so a typo doesn't brick the scheduler. Empty list
+//     falls back to ["failed"]. See KnowledgeScheduledRebuildScheduler
+//     .validParseStatuses for the full enum.
+//   - Mode: "sync" | "async". Default "sync".
+//     * sync — fire one rebuild, remember which document was triggered
+//       (LastTriggeredKnowledgeID + Name + At). On the next tick the
+//       scheduler checks that document's parse_status; if it is still
+//       in a non-terminal state (pending / uploaded / processing /
+//       finalizing), the entire KB is skipped for this tick so we do
+//       not pile two re-parses onto the same document. completed /
+//       failed / cancelled / deleting are all treated as "the previous
+//       run is over", so a failed document unblocks the next trigger.
+//     * async — fire batch_size rebuilds every IntervalSeconds regardless
+//       of what the previously submitted documents are doing.
+//   - LastTriggeredKnowledgeID / LastTriggeredKnowledgeName /
+//     LastTriggeredAt: snapshot of the most recent rebuild trigger. The
+//     KB editor uses them to render a "最近触发的文档" panel so operators
+//     can identify which file the scheduler is currently processing.
+//     Name is denormalised on purpose so the panel doesn't have to call
+//     a second API every time the editor opens.
+type ScheduledRebuildConfig struct {
+	Enabled                    bool       `yaml:"enabled"                              json:"enabled"`
+	IntervalSeconds            int        `yaml:"interval_seconds"                     json:"interval_seconds"`
+	BatchSize                  int        `yaml:"batch_size"                           json:"batch_size"`
+	Statuses                   []string   `yaml:"statuses"                             json:"statuses,omitempty"`
+	Mode                       string     `yaml:"mode"                                 json:"mode"`
+	LastTriggeredKnowledgeID   string     `yaml:"last_triggered_knowledge_id,omitempty" json:"last_triggered_knowledge_id,omitempty"`
+	LastTriggeredKnowledgeName string     `yaml:"last_triggered_knowledge_name,omitempty" json:"last_triggered_knowledge_name,omitempty"`
+	LastTriggeredAt            *time.Time `yaml:"last_triggered_at,omitempty"          json:"last_triggered_at,omitempty"`
+}
+
+// ScheduledRebuildModeSync / Async enumerate the operator-selectable
+// modes for the per-KB scheduled rebuild scheduler. Stored as a
+// free-form string in JSONB so unknown future values don't break the
+// row, but compared against these constants at runtime.
+const (
+	ScheduledRebuildModeSync  = "sync"
+	ScheduledRebuildModeAsync = "async"
+)
+
+// IsEnabled reports whether the per-KB scheduled rebuild is active.
+// Returning false here causes the global scheduler to skip this KB
+// entirely (no DB read, no candidate lookup, no logging noise).
+func (c *ScheduledRebuildConfig) IsEnabled() bool {
+	return c != nil && c.Enabled
+}
+
+// ModeOrDefault returns Mode when it is one of the known constants and
+// falls back to "sync" otherwise. Centralised here so the scheduler,
+// the API layer and the KB EnsureDefaults path all agree on the
+// default — a typo in any one of them would silently disable sync-mode
+// guarantees.
+func (c *ScheduledRebuildConfig) ModeOrDefault() string {
+	if c == nil {
+		return ScheduledRebuildModeSync
+	}
+	switch c.Mode {
+	case ScheduledRebuildModeAsync:
+		return ScheduledRebuildModeAsync
+	case ScheduledRebuildModeSync:
+		return ScheduledRebuildModeSync
+	default:
+		return ScheduledRebuildModeSync
+	}
+}
+
+// Normalize fills the zero-values that an operator might leave empty.
+// Called by both Create/Update service paths and by the scheduler on
+// every tick so legacy rows (e.g. inserted before Mode was introduced)
+// still behave deterministically.
+func (c *ScheduledRebuildConfig) Normalize() {
+	if c == nil {
+		return
+	}
+	if c.BatchSize <= 0 {
+		c.BatchSize = 1
+	}
+	if c.IntervalSeconds <= 0 {
+		c.IntervalSeconds = 60
+	}
+	c.Mode = c.ModeOrDefault()
+	if len(c.Statuses) == 0 {
+		c.Statuses = []string{"failed"}
+	}
+}
+
+// ClearLastTriggered drops the "last triggered document" snapshot.
+// Called by the scheduler once the snapshotted document reaches a
+// terminal state, so the very next tick is free to pick a fresh
+// candidate instead of waiting on a row that is no longer in flight.
+func (c *ScheduledRebuildConfig) ClearLastTriggered() {
+	if c == nil {
+		return
+	}
+	c.LastTriggeredKnowledgeID = ""
+	c.LastTriggeredKnowledgeName = ""
+	c.LastTriggeredAt = nil
+}
+
+// Value implements driver.Valuer so GORM can persist the config as a
+// JSONB column. Always emits a stable representation — nil pointer
+// yields SQL NULL (handled by the parent KB column tag), a zero-value
+// struct emits "{}" (intentionally NOT NULL when stored).
+func (c ScheduledRebuildConfig) Value() (driver.Value, error) {
+	return json.Marshal(c)
+}
+
+// Scan implements sql.Scanner.
+func (c *ScheduledRebuildConfig) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+	b, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(b, c)
+}
+
 // Value implements driver.Valuer
 func (f FAQConfig) Value() (driver.Value, error) {
 	return json.Marshal(f)
@@ -591,6 +755,12 @@ func (kb *KnowledgeBase) EnsureDefaults() {
 	if kb.ExtractConfig != nil && kb.ExtractConfig.Enabled && !kb.IndexingStrategy.GraphEnabled {
 		kb.IndexingStrategy.GraphEnabled = true
 	}
+	// Normalize the per-KB scheduled-rebuild config so legacy rows
+	// pre-dating the Mode / LastTriggered fields still satisfy scheduler
+	// invariants (default mode = sync, default statuses = ["failed"],
+	// default batch_size = 1, default interval = 60s). Safe to call on
+	// a nil config — the helper itself is nil-safe.
+	kb.ScheduledRebuildConfig.Normalize()
 }
 
 // KBCapabilities describes the functional features a knowledge base exposes.

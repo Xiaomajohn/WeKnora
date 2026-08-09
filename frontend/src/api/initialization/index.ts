@@ -156,6 +156,16 @@ export interface KBModelConfigRequest {
         questionCount: number
         customInstructions?: string
     }
+    /** Wiki 合成模型与调优参数。缺省不修改；提供则与现有 WikiConfig 字段级合并。 */
+    wikiConfig?: WikiConfigPayload
+}
+
+export interface WikiConfigPayload {
+    synthesis_model_id?: string
+    max_pages_per_ingest?: number
+    extraction_granularity?: 'focused' | 'standard' | 'exhaustive'
+    content_instructions?: string
+    extraction_instructions?: string
 }
 
 export function updateKBConfig(kbId: string, config: KBModelConfigRequest): Promise<any> {

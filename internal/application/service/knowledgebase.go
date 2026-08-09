@@ -426,6 +426,7 @@ func (s *knowledgeBaseService) UpdateKnowledgeBase(ctx context.Context,
 	name string,
 	description string,
 	config *types.KnowledgeBaseConfig,
+	scheduledRebuildConfig *types.ScheduledRebuildConfig,
 ) (*types.KnowledgeBase, error) {
 	if id == "" {
 		logger.Error(ctx, "Knowledge base ID is empty")
@@ -447,8 +448,16 @@ func (s *knowledgeBaseService) UpdateKnowledgeBase(ctx context.Context,
 	kb.Name = name
 	kb.Description = description
 	if config != nil {
-		kb.ChunkingConfig = config.ChunkingConfig
-		kb.ImageProcessingConfig = config.ImageProcessingConfig
+		// ChunkingConfig / ImageProcessingConfig are pointer fields on
+		// KnowledgeBaseConfig — nil means "caller didn't send the subtree",
+		// so we leave the existing column alone. Non-nil fully overwrites
+		// (matches the legacy semantics).
+		if config.ChunkingConfig != nil {
+			kb.ChunkingConfig = *config.ChunkingConfig
+		}
+		if config.ImageProcessingConfig != nil {
+			kb.ImageProcessingConfig = *config.ImageProcessingConfig
+		}
 		if config.FAQConfig != nil {
 			kb.FAQConfig = config.FAQConfig
 		}
@@ -476,6 +485,15 @@ func (s *knowledgeBaseService) UpdateKnowledgeBase(ctx context.Context,
 	}
 	kb.UpdatedAt = time.Now()
 	kb.EnsureDefaults()
+
+	// Persist the per-KB scheduled-rebuild subtree. When the caller
+	// passes nil we leave the column alone (preserves prior decisions),
+	// otherwise the pointer — even one full of zeros — fully overwrites
+	// the previous JSONB. EnsureDefaults has already normalised any
+	// defaults the operator omitted.
+	if scheduledRebuildConfig != nil {
+		kb.ScheduledRebuildConfig = scheduledRebuildConfig
+	}
 
 	logger.Info(ctx, "Saving knowledge base update")
 	if err := s.repo.UpdateKnowledgeBase(ctx, kb); err != nil {

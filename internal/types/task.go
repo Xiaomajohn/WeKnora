@@ -10,6 +10,15 @@ const (
 	WorkerPoolMaintenance = "maintenance"
 	WorkerPoolShared      = "shared"
 	WorkerPoolWiki        = "wiki"
+	// WorkerPoolSerial is a dedicated single-worker pool that drains
+	// QueueCoreSerial. Strict-serial batch reparses (parser.batch_reparse_mode
+	// = "serial" or the per-batch UI override) enqueue their document
+	// tasks here so the new asynq core worker pool, which runs with
+	// concurrency=8 by default, cannot promote more than one parse at a
+	// time. The pool's default concurrency is intentionally 1; bumping it
+	// would silently weaken the "one finishes, then the next starts"
+	// guarantee the feature advertises.
+	WorkerPoolSerial = "serial"
 
 	// Upstream defaults are explicit guarantees plus an elastic pool. The
 	// shared pool may consume core and enrichment queues, so idle capacity in
@@ -20,6 +29,10 @@ const (
 	DefaultMaintenanceWorkerConcurrency = 4
 	DefaultSharedWorkerConcurrency      = 6
 	DefaultWikiWorkerConcurrency        = 8
+	// DefaultSerialWorkerConcurrency is locked to 1; do not expose it as a
+	// tunable. The whole point of the serial pool is to provide a hard
+	// "one at a time" lane.
+	DefaultSerialWorkerConcurrency = 1
 	DefaultUpstreamWorkerConcurrency    = DefaultCoreWorkerConcurrency +
 		DefaultPostProcessWorkerConcurrency + DefaultEnrichmentWorkerConcurrency +
 		DefaultMaintenanceWorkerConcurrency + DefaultSharedWorkerConcurrency
@@ -38,6 +51,13 @@ const (
 	QueueSync        = "sync"
 	QueueMaintenance = "low"
 	QueueWiki        = "wiki"
+	// QueueCoreSerial is the dedicated single-worker queue that powers
+	// the "strict serial" batch reparse mode. Subscribed by
+	// WorkerPoolSerial only; we deliberately do NOT add it to the shared
+	// pool's queue list, because elastic borrowing from the shared tier
+	// would silently re-introduce parallelism the feature is meant to
+	// remove.
+	QueueCoreSerial = "core_serial"
 )
 
 // QueueDefinition is the single source of truth for queue topology. Worker
@@ -71,6 +91,15 @@ var queueDefinitions = []QueueDefinition{
 		TypeKnowledgeListDelete, TypeKnowledgeListReparse, TypeKnowledgeMove,
 	}},
 	{Name: QueueWiki, Pool: WorkerPoolWiki, Weight: 1, TaskTypes: []string{TypeWikiIngest, TypeWikiFinalize}},
+	// QueueCoreSerial handles TypeDocumentProcess + TypeManualProcess for
+	// the "strict serial" batch reparse path. It runs on its own
+	// dedicated single-worker pool (WorkerPoolSerial) so it cannot borrow
+	// or be borrowed by the regular core/shared tiers — a hard
+	// one-at-a-time lane regardless of how busy the rest of the system
+	// is. SharedWeight is intentionally 0; see QueueCoreSerial doc.
+	{Name: QueueCoreSerial, Pool: WorkerPoolSerial, Weight: 1, TaskTypes: []string{
+		TypeDocumentProcess, TypeManualProcess,
+	}},
 }
 
 // QueueDefinitions returns a copy so callers cannot mutate global topology.
@@ -132,6 +161,13 @@ type WorkerPoolConcurrency struct {
 	Maintenance int
 	Shared      int
 	Wiki        int
+	// Serial is the capacity of the strict-serial lane. The default is
+	// 1 and we intentionally do not expose an env override in
+	// ResolveWorkerPoolConcurrency — the field exists so the runtime
+	// inspector can report the pool size, and so a future operator who
+	// really knows what they're doing can flip it via direct DB write
+	// (with the trade-off documented in WorkerPoolSerial's doc).
+	Serial int
 }
 
 func DefaultWorkerPoolConcurrency() WorkerPoolConcurrency {
@@ -142,6 +178,7 @@ func DefaultWorkerPoolConcurrency() WorkerPoolConcurrency {
 		Maintenance: DefaultMaintenanceWorkerConcurrency,
 		Shared:      DefaultSharedWorkerConcurrency,
 		Wiki:        DefaultWikiWorkerConcurrency,
+		Serial:      DefaultSerialWorkerConcurrency,
 	}
 }
 
@@ -167,6 +204,10 @@ func ResolveWorkerPoolConcurrency(read func(key, env string, fallback int) int) 
 	allocation.Maintenance = positive("asynq.maintenance_concurrency", "WEKNORA_ASYNQ_MAINTENANCE_CONCURRENCY", allocation.Maintenance)
 	allocation.Shared = positive("asynq.shared_concurrency", "WEKNORA_ASYNQ_SHARED_CONCURRENCY", allocation.Shared)
 	allocation.Wiki = positive("asynq.wiki_concurrency", "WEKNORA_WIKI_ASYNQ_CONCURRENCY", allocation.Wiki)
+	// Serial concurrency is hard-coded to 1; we never read it from a
+	// setting or env var. The runtime inspector reports it so operators
+	// can confirm the lane is running as advertised.
+	allocation.Serial = DefaultSerialWorkerConcurrency
 	return allocation
 }
 
@@ -400,8 +441,22 @@ type KnowledgeListDeletePayload struct {
 // KnowledgeListReparsePayload represents the batch knowledge reparse task payload
 type KnowledgeListReparsePayload struct {
 	TracingContext
-	TenantID      uint64                     `json:"tenant_id"`
-	KnowledgeIDs  []string                   `json:"knowledge_ids"`
+	TenantID     uint64                     `json:"tenant_id"`
+	KnowledgeIDs []string                   `json:"knowledge_ids"`
+	// Serial routes the worker to enqueue each document's processing
+	// task on QueueCoreSerial (a dedicated single-worker pool) instead
+	// of the default core queue. The maintenance worker still
+	// submits docs one at a time, but with Serial=true the resulting
+	// document:process tasks are also processed serially by the serial
+	// pool, giving a strict "one finishes, then the next starts"
+	// guarantee end-to-end. nil/zero = default (parallel) behaviour.
+	//
+	// The flag is propagated by the handler from the API request
+	// (with system-setting fallback), so the worker never has to read
+	// the setting itself.
+	Serial bool `json:"serial,omitempty"`
+	// ProcessConfig kept last so the JSON shape stays backward
+	// compatible for in-flight tasks that pre-date the Serial field.
 	ProcessConfig *KnowledgeProcessOverrides `json:"process_config,omitempty"`
 }
 

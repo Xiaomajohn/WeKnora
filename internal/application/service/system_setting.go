@@ -271,6 +271,28 @@ var registry = map[string]settingSpec{
 			"每次调用实时读取，修改后立即生效、无需重启。0 或负数表示关闭默认限制" +
 			"（各模型仍会尊重自身在模型管理里配置的上限）。仅影响后台任务，不影响交互式对话。",
 	},
+	// parser.batch_reparse_mode selects how the /batch-reparse endpoint
+	// dispatches its per-document work after the maintenance worker
+	// loop. "parallel" (default) submits each document:process task to
+	// the normal core queue, where the 8-worker core pool processes
+	// them concurrently — fast, but bursts upstream embedding RPM.
+	// "serial" routes the same tasks to a dedicated single-worker
+	// queue (QueueCoreSerial) so they execute strictly one at a time:
+	// one document fully completes, then the next begins. Recommended
+	// for users with strict per-tenant embedding RPM limits (e.g. 200
+	// RPM). The per-batch UI override in 批量解析 takes precedence;
+	// this setting is the system-wide default when the user does not
+	// explicitly choose. Read at enqueue time, no restart required.
+	"parser.batch_reparse_mode": {
+		Type:     "string",
+		EnvName:  "WEKNORA_PARSER_BATCH_REPARSE_MODE",
+		Default:  "parallel",
+		Enum:     []string{"parallel", "serial"},
+		Category: "worker",
+		Description: "批量解析模式。parallel = 默认，并行提交到 core 队列（并发度由 asynq.core_concurrency 控制）；" +
+			"serial = 严格串行，提交到专用的 core_serial 队列（并发度=1），一个文档解析完成后才开始下一个。" +
+			"在严格 RPM 限制场景下推荐 serial。批量解析弹窗中的临时选项优于此设置。修改后立即生效，无需重启。",
+	},
 }
 
 // systemSettingService wires the repository, audit log, and (P2)

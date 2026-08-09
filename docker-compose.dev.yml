@@ -236,6 +236,42 @@ services:
     command: ["true"]
     restart: "no"
 
+  document-converter:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.document-converter
+      args:
+        - APT_MIRROR=${APT_MIRROR:-}
+    image: wechatopenai/weknora-document-converter:${WEKNORA_VERSION:-latest}
+    container_name: WeKnora-document-converter-dev
+    ports:
+      - "127.0.0.1:${DOCUMENT_CONVERTER_PORT:-18080}:8080"
+    environment:
+      - CONVERTER_MAX_FILE_MB=${CONVERTER_MAX_FILE_MB:-50}
+      - CONVERTER_MAX_DECODED_MB=${CONVERTER_MAX_DECODED_MB:-100}
+      - CONVERTER_MAX_OUTPUT_MB=${CONVERTER_MAX_OUTPUT_MB:-50}
+      - CONVERTER_TIMEOUT_SECONDS=${CONVERTER_TIMEOUT_SECONDS:-45}
+      - CONVERTER_MAX_CONCURRENCY=${CONVERTER_MAX_CONCURRENCY:-2}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp/document-converter:rw,noexec,nosuid,size=512m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 1g
+    cpus: 2.0
+    networks:
+      - WeKnora-network-dev
+    restart: unless-stopped
+
   docreader:
     build:
       context: .

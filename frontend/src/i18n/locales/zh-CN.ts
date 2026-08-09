@@ -606,6 +606,24 @@ export default {
     batchReparseSuccess: "已提交 {count} 个重建任务",
     batchReparseFailed: "批量重建失败",
     batchReparseSkippedInFlight: "已跳过 {count} 个正在解析中的文档",
+    // 批量解析：仅触发未解析（uploaded/pending）文档的解析。复用
+    // /batch-reparse 端点，因此走同一份状态机与幂等保护。
+    batchParse: "批量解析",
+    batchParseTooltip: "将对所选项中 {count} 个未解析文档触发解析",
+    batchParseDisabledHint: "仅对未解析或等待中的文档可用",
+    batchParseNoEligible: "所选文档中没有可解析的项",
+    batchParseSkippedNotEligible: "已跳过 {count} 个非未解析状态的文档",
+    batchParseSuccess: "已发起 {count} 个解析任务",
+    batchParseFailed: "批量解析失败",
+    // 批量解析模式选择弹窗（与"批量解析"按钮配套）
+    batchParseModeTitle: "选择批量解析模式",
+    batchParseModeLabel: "解析模式",
+    batchParseModeHint: "严格串行：一个文档解析完后才开始下一个，适合严格 RPM 限制场景；并行：使用默认并发度，速度快但可能压满上游 RPM。",
+    batchParseModeParallel: "并行（默认）",
+    batchParseModeSerial: "严格串行",
+    batchParseModeUseDefault: "使用系统默认",
+    batchParseModeUseDefaultHint: "按系统设置 parser.batch_reparse_mode 的当前值提交",
+    batchParseConfirm: "开始解析",
     statusCompleted: "已完成",
     statusProcessing: "解析中",
     statusFinalizing: "优化中",
@@ -664,6 +682,7 @@ export default {
     parseStatusFailed: "失败",
     parseStatusCancelled: "已取消",
     parseStatusDraft: "草稿",
+    parseStatusUploaded: "未解析",
     sourceFilter: "来源",
     allSources: "全部来源",
     sourceWeb: "网页",
@@ -763,6 +782,12 @@ export default {
     manualSource: "待发布文档",
     editUrl: "修改 URL",
     manualCharCount: "{count} 个字符",
+    // autoParse: 是否在上传后立即入队解析。关闭时文件落到存储后停在
+    // `uploaded` 状态，只能由用户手动 /reparse 或 KB 级定时重建调度器推进。
+    // 默认开启，保持现有用户体验不变。
+    autoParseLabel: "上传后立即解析",
+    autoParseOn: "立即入队解析",
+    autoParseOff: "仅入库，待人工触发 /reparse",
   },
   knowledgeStages: {
     title: "处理流水线",
@@ -2772,6 +2797,10 @@ export default {
         model: {
           max_concurrency: "模型默认并发上限",
         },
+        parser: {
+          pipeline_size: "解析管道大小",
+          batch_reparse_mode: "批量解析模式",
+        },
       },
       keyDescriptions: {
         auth: {
@@ -2818,6 +2847,17 @@ export default {
             "每次调用实时读取，修改后立即生效、无需重启。0 或负数表示关闭默认限制" +
             "（各模型仍会尊重自身在模型管理里配置的上限）。仅影响后台任务，不影响交互式对话。",
         },
+        parser: {
+          pipeline_size:
+            "解析管道大小。`uploaded` 状态文档被调度时的同时在飞上限。" +
+            "调度器会统计当前 in-flight（processing + finalizing）总数，超过该上限则不再触发新解析。" +
+            "每次轮询实时读取，修改后下一轮调度生效，无需重启。0 或负数表示关闭调度能力，" +
+            "不影响现有 asynq `pending` 文档与手动 /reparse。建议限流场景下保持 1。",
+          batch_reparse_mode:
+            "批量解析模式。parallel = 并行提交到默认 core 队列（并发度由 asynq.core_concurrency 控制，速度快）；" +
+            "serial = 严格串行，提交到专用 core_serial 队列（并发度=1），一个文档解析完成后才开始下一个，" +
+            "适合严格 RPM 限制场景。批量解析弹窗中的临时选项会覆盖此设置。修改后立即生效，无需重启。",
+        },
       },
       enumLabels: {
         auth: {
@@ -2828,6 +2868,12 @@ export default {
           default_tenant_mode: {
             create_personal: "自动创建个人空间",
             tenantless: "不自动创建空间",
+          },
+        },
+        parser: {
+          batch_reparse_mode: {
+            parallel: "并行（默认）",
+            serial: "严格串行",
           },
         },
       },
@@ -4161,6 +4207,7 @@ export default {
       asr: "音频处理",
       datasource: "数据源",
       share: "共享管理",
+      scheduledRebuild: "定时重建",
       indexing: "索引策略",
     },
     errors: {
@@ -5704,12 +5751,6 @@ export default {
     think: "深度思考",
     todoWrite: "制定计划",
   },
-  vectorStoreBadge: {
-    systemDefault: "系统默认",
-    sharedFromOrg: "来自其他组织的共享",
-    unknownStore: "未知存储",
-    unavailable: "不可用",
-  },
   kbSettings: {
     vectorStore: {
       title: "向量存储",
@@ -5727,6 +5768,29 @@ export default {
       unavailableHint:
         "绑定的向量存储当前不可用，请在设置 → 向量存储中检查其连接配置。",
       goGlobalSettings: "前往向量存储设置",
+    },
+    scheduledRebuild: {
+      title: "定时重建",
+      description: "按此知识库单独配置周期性重建。调度器只处理所选解析状态的文档。",
+      enabledLabel: "启用定时重建",
+      enabledDesc: "定期检查并重新提交符合条件的文档。关闭后不会自动触发。",
+      modeLabel: "调度模式",
+      modeDesc: "选择定时重建的调度方式。同步模式会等上一个文档完成后再处理下一个；异步模式按间隔连续触发。",
+      modeOptionSync: "同步",
+      modeOptionAsync: "异步",
+      modeDescSync: "同步：触发一个文档后记录其状态；下次扫描时，只有在上次触发的文档已进入完成、失败、取消或删除等终止状态后，才会处理下一个文档。",
+      modeDescAsync: "异步：每次扫描都会提交设定的文档数量，不等上一次是否完成。适合批量重建。",
+      intervalLabel: "扫描周期",
+      intervalDesc: "每隔多少秒检查一次该知识库。",
+      batchLabel: "每轮处理数量",
+      batchDesc: "每次扫描最多触发多少个文档，默认 1。同步模式下仅生效 1 个。",
+      statusesLabel: "扫描状态",
+      statusesDesc: "选择需要定时重建的解析状态，默认只选择 failed。",
+      lastTriggeredTitle: "最近触发的文档",
+      lastTriggeredName: "文档名称",
+      lastTriggeredAt: "触发时间",
+      lastTriggeredInFlightTip: "提示：该文档仍在处理中，同步模式下本轮扫描将跳过 KB，不会再触发其它文档，直至其进入终止状态。",
+      lastTriggeredEmpty: "尚未触发过任何文档。",
     },
     storage: {
       title: "存储引擎",

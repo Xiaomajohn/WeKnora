@@ -51,6 +51,10 @@ func (s *stubKBRepoForModelDelete) ListUserKBPinIDs(context.Context, uint64, str
 	return nil, nil
 }
 
+func (s *stubKBRepoForModelDelete) ListScheduledRebuildKBs(context.Context) ([]*types.KnowledgeBase, error) {
+	return nil, nil
+}
+
 type stubAgentRepoForModelDelete struct {
 	count int64
 }

@@ -34,6 +34,13 @@ type AsynqTaskParams struct {
 	MaintenanceServer    *asynq.Server `name:"maintenanceAsynqServer"`
 	SharedServer         *asynq.Server `name:"sharedAsynqServer"`
 	WikiServer           *asynq.Server `name:"wikiAsynqServer"`
+	// SerialServer drains QueueCoreSerial at concurrency=1 to power
+	// the strict-serial batch reparse mode (parser.batch_reparse_mode
+	// = "serial" or the per-batch UI override). Kept on its own
+	// dedicated pool (NOT shared with core) so elastic borrowing cannot
+	// silently re-introduce parallelism the feature is meant to
+	// remove.
+	SerialServer         *asynq.Server `name:"serialAsynqServer"`
 	KnowledgeService     interfaces.KnowledgeService
 	KnowledgeBaseService interfaces.KnowledgeBaseService
 	TagService           interfaces.KnowledgeTagService
@@ -222,6 +229,21 @@ func NewWikiAsynqServer(svc interfaces.SystemSettingService) *asynq.Server {
 	return newAsynqServer(concurrency, types.QueueWeightsForPool(types.WorkerPoolWiki))
 }
 
+// NewSerialAsynqServer builds the strict-serial lane. It subscribes to
+// QueueCoreSerial only and runs at concurrency=1 so a serial-mode batch
+// reparse processes documents strictly one-at-a-time. The same shared
+// handler mux is mounted (it routes by task type, not queue), so the
+// TypeDocumentProcess handler runs here too — that is by design: we
+// want document:process tasks that were enqueued with
+// asynq.Queue(types.QueueCoreSerial) to land on this pool, while
+// tasks enqueued with the default core queue still go to the
+// concurrency=8 core pool.
+func NewSerialAsynqServer(svc interfaces.SystemSettingService) *asynq.Server {
+	concurrency := resolveWorkerPoolConcurrency(svc).Serial
+	log.Printf("asynq serial-pool server starting with concurrency=%d", concurrency)
+	return newAsynqServer(concurrency, types.QueueWeightsForPool(types.WorkerPoolSerial))
+}
+
 func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 	// Create a new mux and register all handlers
 	mux := asynq.NewServeMux()
@@ -323,6 +345,13 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 	runPool("maintenance-pool", params.MaintenanceServer)
 	runPool("shared-pool", params.SharedServer)
 	runPool("wiki-pool", params.WikiServer)
+	// Serial pool runs the SAME mux as the others. Asynq's mux dispatches
+	// by task type and ignores the enqueue-time queue, so registering the
+	// same TypeDocumentProcess handler is correct: tasks enqueued to
+	// QueueCoreSerial will be picked up here (because this is the only
+	// pool that subscribes to it) and routed to ProcessDocument just like
+	// the core pool does.
+	runPool("serial-pool", params.SerialServer)
 	return mux
 }
 

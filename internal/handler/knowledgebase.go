@@ -356,6 +356,12 @@ func (h *KnowledgeBaseHandler) CreateKnowledgeBase(c *gin.Context) {
 		c.Error(apperrors.NewBadRequestError("Invalid request parameters").WithDetails(err.Error()))
 		return
 	}
+	// Normalise the optional scheduled-rebuild subtree so downstream
+	// service code can rely on defaults (Mode = sync, Statuses =
+	// ["failed"], …). CreateKnowledgeBase binds the whole KnowledgeBase
+	// type, so this explicit Normalize protects the create path from
+	// a zero-value JSON object sneaking through.
+	req.ScheduledRebuildConfig.Normalize()
 	if err := validateExtractConfig(req.ExtractConfig); err != nil {
 		logger.Error(ctx, "Invalid extract configuration", err)
 		c.Error(err)
@@ -816,9 +822,25 @@ func (h *KnowledgeBaseHandler) TogglePinKnowledgeBase(c *gin.Context) {
 
 // UpdateKnowledgeBaseRequest defines the request body structure for updating a knowledge base
 type UpdateKnowledgeBaseRequest struct {
-	Name        string                     `json:"name"        binding:"required"`
-	Description string                     `json:"description"`
-	Config      *types.KnowledgeBaseConfig `json:"config"`
+	Name        string `json:"name"        binding:"required"`
+	Description string `json:"description"`
+	// Config carries optional sub-config mutations in a single payload
+	// (faq_config / wiki_config / indexing_strategy / chunking_config /
+	// image_processing_config). Each subtree is pointer-typed so absent
+	// fields leave the persisted column untouched; only the subtrees the
+	// caller actually sends get written. nil for the whole Config means
+	// "don't touch any sub-config". Indexed_strategy, when present, must
+	// still enable at least one indexing pipeline (service-side guard).
+	Config *types.KnowledgeBaseConfig `json:"config"`
+	// ScheduledRebuildConfig is accepted as a top-level field for
+	// symmetry with the frontend payload (see
+	// KnowledgeBaseEditorModal.vue, which attaches it next to name /
+	// description / config). A nil value leaves the persisted JSONB
+	// column untouched; a non-nil value — even one with every field
+	// default — fully overwrites the previous config. Service layer
+	// normalises legacy rows so an empty object still produces the
+	// scheduler defaults (Mode=sync, Statuses=["failed"], …).
+	ScheduledRebuildConfig *types.ScheduledRebuildConfig `json:"scheduled_rebuild_config"`
 }
 
 // UpdateKnowledgeBase godoc
@@ -858,23 +880,24 @@ func (h *KnowledgeBaseHandler) UpdateKnowledgeBase(c *gin.Context) {
 		c.Error(apperrors.NewBadRequestError("Invalid request parameters").WithDetails(err.Error()))
 		return
 	}
-	if req.Config != nil {
-		probe := &types.KnowledgeBase{
-			ChunkingConfig:        req.Config.ChunkingConfig,
-			ImageProcessingConfig: req.Config.ImageProcessingConfig,
-			WikiConfig:            req.Config.WikiConfig,
-		}
-		if err := validateKnowledgeBasePromptInstructions(probe); err != nil {
-			c.Error(err)
-			return
-		}
-	}
+	// Normalise the optional scheduled-rebuild subtree so downstream
+	// service code can rely on defaults (Mode = sync, Statuses =
+	// ["failed"], …). The frontend always sends the subtree when
+	// editing a KB, but accept either presence — a nil value means
+	// "leave the persisted JSONB column untouched" per the service
+	// contract.
+	req.ScheduledRebuildConfig.Normalize()
 
 	logger.Infof(ctx, "Updating knowledge base, ID: %s, name: %s",
 		secutils.SanitizeForLog(id), secutils.SanitizeForLog(req.Name))
 
-	// Update the knowledge base
-	kb, err := h.service.UpdateKnowledgeBase(ctx, id, req.Name, req.Description, req.Config)
+	// Config carries per-subtree mutations (see UpdateKnowledgeBaseRequest
+	// docs). Service-layer nil checks on every subtree keep persisted
+	// columns untouched when the caller doesn't include them. Vector
+	// store binding is still immutable — KnowledgeBaseConfig and the
+	// service signature both lack VectorStoreID, and the GORM `<-:create`
+	// tag on KnowledgeBase.VectorStoreID is the final guardrail.
+	kb, err := h.service.UpdateKnowledgeBase(ctx, id, req.Name, req.Description, req.Config, req.ScheduledRebuildConfig)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, nil)
 		c.Error(apperrors.NewInternalServerError(err.Error()))
@@ -1243,7 +1266,19 @@ func (h *KnowledgeBaseHandler) GetKBCloneProgress(c *gin.Context) {
 	})
 }
 
-// validateExtractConfig validates the graph configuration parameters
+// validateExtractConfig validates the graph configuration parameters.
+//
+// All four tuning fields (Text / Tags / Nodes / Relations) are kept
+// OPTIONAL by design. They only OVERRIDE the global prompt template
+// defaults shipped in config/prompt_templates (see ExtractGraph /
+// FabriText in config.yaml) — the actual extraction always runs against
+// each chunk's real content, never against Text. An operator who just
+// wants to flip the graph switch on without curating examples should be
+// able to save and let the global default prompt do its job; for that
+// to work we must not reject empty fields here. The handful of legacy
+// callers that legitimately needed a non-empty sample were migrated to
+// ask for it explicitly (e.g. initialization-time graph tester), so
+// dropping these checks from the generic save path is safe.
 func validateExtractConfig(config *types.ExtractConfig) error {
 	if config == nil {
 		return nil
@@ -1252,41 +1287,28 @@ func validateExtractConfig(config *types.ExtractConfig) error {
 		config.Enabled = false
 		return nil
 	}
-	// Validate text field
-	if config.Text == "" {
-		return apperrors.NewBadRequestError("text cannot be empty")
-	}
-
-	// Validate tags field
-	if len(config.Tags) == 0 {
-		return apperrors.NewBadRequestError("tags cannot be empty")
-	}
+	// Tags/Nodes/Relations are schema hints — empty means "use the
+	// global prompt template's defaults". We only assert they are
+	// well-formed when present (no empty strings / no dangling
+	// references) so a half-filled config can't silently degrade
+	// extraction quality.
 	for i, tag := range config.Tags {
 		if tag == "" {
 			return apperrors.NewBadRequestError("tag cannot be empty at index " + strconv.Itoa(i))
 		}
 	}
-
-	// Validate nodes
-	if len(config.Nodes) == 0 {
-		return apperrors.NewBadRequestError("nodes cannot be empty")
-	}
-	nodeNames := make(map[string]bool)
 	for i, node := range config.Nodes {
 		if node.Name == "" {
 			return apperrors.NewBadRequestError("node name cannot be empty at index " + strconv.Itoa(i))
 		}
-		// Check for duplicate node names
-		if nodeNames[node.Name] {
+	}
+	seenNodeNames := make(map[string]bool, len(config.Nodes))
+	for _, node := range config.Nodes {
+		if seenNodeNames[node.Name] {
 			return apperrors.NewBadRequestError("duplicate node name: " + node.Name)
 		}
-		nodeNames[node.Name] = true
+		seenNodeNames[node.Name] = true
 	}
-
-	if len(config.Relations) == 0 {
-		return apperrors.NewBadRequestError("relations cannot be empty")
-	}
-	// Validate relations
 	for i, relation := range config.Relations {
 		if relation.Node1 == "" {
 			return apperrors.NewBadRequestError("relation node1 cannot be empty at index " + strconv.Itoa(i))
@@ -1297,11 +1319,10 @@ func validateExtractConfig(config *types.ExtractConfig) error {
 		if relation.Type == "" {
 			return apperrors.NewBadRequestError("relation type cannot be empty at index " + strconv.Itoa(i))
 		}
-		// Check if referenced nodes exist
-		if !nodeNames[relation.Node1] {
+		if !seenNodeNames[relation.Node1] {
 			return apperrors.NewBadRequestError("relation references non-existent node1: " + relation.Node1)
 		}
-		if !nodeNames[relation.Node2] {
+		if !seenNodeNames[relation.Node2] {
 			return apperrors.NewBadRequestError("relation references non-existent node2: " + relation.Node2)
 		}
 	}

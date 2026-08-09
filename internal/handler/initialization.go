@@ -141,6 +141,10 @@ type KBModelConfigRequest struct {
 		QuestionCount      int    `json:"questionCount"`
 		CustomInstructions string `json:"customInstructions"`
 	} `json:"questionGeneration"`
+
+	// Wiki 配置（合成模型 + 调优参数）。指针缺席 = 本次不修改；
+	// 非 nil 指针 = 用请求子树做字段级合并（见 handler）。
+	WikiConfig *types.WikiConfig `json:"wiki_config"`
 }
 
 // InitializationRequest 初始化请求结构
@@ -435,6 +439,32 @@ func (h *InitializationHandler) UpdateKBConfig(c *gin.Context) {
 			CustomInstructions: strings.TrimSpace(req.QuestionGeneration.CustomInstructions),
 		}
 	}
+
+	// Wiki 配置：指针缺席 = 不修改；非 nil = 与现有 WikiConfig 做字段级合并。
+	// 与 service.UpdateKnowledgeBase 的整体覆盖不同，KB 编辑面板只暴露部分
+	// 字段（合成模型 / 页面数 / 粒度 / 指令），整体覆盖会把后端独立维护的
+	// Ingest* 调优参数清零，因此这里保留 Ingest* 等未在前端表单暴露的字段。
+	if req.WikiConfig != nil {
+		if req.WikiConfig.SynthesisModelID != "" && req.WikiConfig.SynthesisModelID != req.LLMModelID {
+			wikiModel, mErr := h.modelService.GetModelByID(ctx, req.WikiConfig.SynthesisModelID)
+			if mErr != nil || wikiModel == nil {
+				logger.Error(ctx, "Wiki synthesis model not found")
+				c.Error(errors.NewBadRequestError("Wiki 合成模型不存在"))
+				return
+			}
+		}
+		if kb.WikiConfig == nil {
+			kb.WikiConfig = &types.WikiConfig{}
+		}
+		existing := *kb.WikiConfig
+		*kb.WikiConfig = *req.WikiConfig
+		// 保留未在 KB 编辑表单暴露的 ingest 调优字段
+		kb.WikiConfig.IngestBatchSize = existing.IngestBatchSize
+		kb.WikiConfig.IngestMapParallel = existing.IngestMapParallel
+		kb.WikiConfig.IngestReduceParallel = existing.IngestReduceParallel
+		kb.WikiConfig.IngestMaxInflight = existing.IngestMaxInflight
+	}
+
 	types.NormalizeKnowledgeBasePromptInstructions(kb)
 	if err := validateKnowledgeBasePromptInstructions(kb); err != nil {
 		c.Error(err)

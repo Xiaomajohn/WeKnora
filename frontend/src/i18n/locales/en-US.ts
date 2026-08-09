@@ -605,6 +605,24 @@ export default {
     batchReparseSuccess: 'Submitted {count} rebuild tasks',
     batchReparseFailed: 'Batch rebuild failed',
     batchReparseSkippedInFlight: 'Skipped {count} document(s) still being parsed',
+    // 批量解析：仅触发未解析（uploaded/pending）文档的解析。复用
+    // /batch-reparse 端点，因此走同一份状态机与幂等保护。
+    batchParse: 'Batch parse',
+    batchParseTooltip: 'Will trigger parsing for {count} unparsed document(s) in the selection',
+    batchParseDisabledHint: 'Only available for unparsed or pending documents',
+    batchParseNoEligible: 'No parseable documents in the current selection',
+    batchParseSkippedNotEligible: 'Skipped {count} document(s) not in an unparsed state',
+    batchParseSuccess: 'Submitted {count} parse task(s)',
+    batchParseFailed: 'Batch parse failed',
+    // Batch parse mode selection dialog (paired with the "Batch parse" button)
+    batchParseModeTitle: 'Select batch parse mode',
+    batchParseModeLabel: 'Parse mode',
+    batchParseModeHint: 'Strict serial: one document fully completes before the next starts — recommended for strict upstream RPM limits. Parallel: uses the default concurrency for speed, but may burst upstream RPM.',
+    batchParseModeParallel: 'Parallel (default)',
+    batchParseModeSerial: 'Strict serial',
+    batchParseModeUseDefault: 'Use system default',
+    batchParseModeUseDefaultHint: 'Submit using the current value of system setting parser.batch_reparse_mode',
+    batchParseConfirm: 'Start parsing',
     statusCompleted: 'Completed',
     statusProcessing: 'Processing',
     statusFinalizing: 'Optimizing',
@@ -660,6 +678,7 @@ export default {
     parseStatusFailed: 'Failed',
     parseStatusCancelled: 'Cancelled',
     parseStatusDraft: 'Draft',
+    parseStatusUploaded: 'Not parsed',
     sourceFilter: 'Source',
     allSources: 'All Sources',
     sourceWeb: 'Web',
@@ -760,6 +779,14 @@ export default {
     manualSource: 'Document to publish',
     editUrl: 'Edit URL',
     manualCharCount: '{count} characters',
+    // autoParse: whether the upload immediately enqueues parsing. Off
+    // keeps the file in `uploaded` state; the document only progresses
+    // via manual /reparse or the per-KB scheduled_rebuild scheduler.
+    // No background process auto-promotes uploaded rows. Default on
+    // preserves the existing UX.
+    autoParseLabel: 'Parse immediately after upload',
+    autoParseOn: 'Enqueue parsing right away',
+    autoParseOff: 'Store only; user triggers /reparse',
   },
 
   knowledgeStages: {
@@ -2558,6 +2585,7 @@ export default {
       asr: 'Audio',
       datasource: 'Data Sources',
       share: 'Sharing',
+      scheduledRebuild: 'Scheduled Rebuild',
       indexing: 'Indexing Strategy',
     },
     errors: {
@@ -3778,6 +3806,10 @@ export default {
         model: {
           max_concurrency: 'Default per-model concurrency limit',
         },
+        parser: {
+          pipeline_size: 'Parser pipeline size',
+          batch_reparse_mode: 'Batch parse mode',
+        },
       },
       keyDescriptions: {
         auth: {
@@ -3813,6 +3845,17 @@ export default {
           max_concurrency:
             'Default cap on concurrent background (ingestion/enrichment) calls to a single model, keyed by model ID and shared across replicas. Read on every call and applied immediately with no restart. 0 or a negative value disables the default cap (each model still honours its own limit configured in model management). Affects background tasks only, not interactive chat.',
         },
+        parser: {
+          pipeline_size:
+            'Maximum in-flight count for the in-process parser scheduler that promotes documents uploaded with auto_parse=false. ' +
+            'The scheduler counts currently running tasks (processing + finalizing) and will not start new parses when this cap is reached. ' +
+            'Read on every poll and applied on the next scheduler tick — no restart required. 0 or a negative value disables the scheduler ' +
+            '(existing asynq `pending` documents and manual /reparse calls are unaffected). Keep at 1 on rate-limited setups.',
+          batch_reparse_mode:
+            'Batch parse mode. parallel = submit to the default core queue, processed concurrently (concurrency = asynq.core_concurrency); ' +
+            'serial = submit to a dedicated core_serial queue (concurrency = 1) so one document fully completes before the next starts. ' +
+            'Recommended on strict upstream RPM limits. The per-batch dialog override takes precedence over this setting. Takes effect immediately, no restart required.',
+        },
       },
       enumLabels: {
         auth: {
@@ -3823,6 +3866,12 @@ export default {
           default_tenant_mode: {
             create_personal: 'Create personal workspace',
             tenantless: 'Do not create a workspace',
+          },
+        },
+        parser: {
+          batch_reparse_mode: {
+            parallel: 'Parallel (default)',
+            serial: 'Strict serial',
           },
         },
       },
@@ -5697,6 +5746,29 @@ export default {
       unavailableHint:
         'The bound vector store is currently unavailable; check its connection configuration in Settings → Vector Stores.',
       goGlobalSettings: 'Go to Vector Store Settings',
+    },
+    scheduledRebuild: {
+      title: 'Scheduled Rebuild',
+      description: 'Configure periodic rebuilding independently for this knowledge base.',
+      enabledLabel: 'Enable scheduled rebuild',
+      enabledDesc: 'Periodically check and resubmit eligible documents.',
+      modeLabel: 'Schedule mode',
+      modeDesc: 'Choose how the scheduler paces rebuilds. Sync waits for the previous document to reach a terminal state before triggering the next; async fires on the interval regardless.',
+      modeOptionSync: 'Sync',
+      modeOptionAsync: 'Async',
+      modeDescSync: 'Sync: when a document is kicked off for rebuild the scheduler remembers it. The next scan only fires another document after the previous one reaches a terminal status (completed / failed / cancelled / deleting).',
+      modeDescAsync: 'Async: each scan submits up to batch_size rebuilds without waiting for the previous batch to finish. Best for batch reruns.',
+      intervalLabel: 'Scan interval',
+      intervalDesc: 'How often this knowledge base is scanned, in seconds.',
+      batchLabel: 'Documents per run',
+      batchDesc: 'Maximum documents submitted per scan. Capped at 1 in sync mode.',
+      statusesLabel: 'Statuses to scan',
+      statusesDesc: 'Parse statuses eligible for scheduled rebuilding.',
+      lastTriggeredTitle: 'Most recent rebuild target',
+      lastTriggeredName: 'Document name',
+      lastTriggeredAt: 'Triggered at',
+      lastTriggeredInFlightTip: 'Note: this document is still in flight. In sync mode the scheduler will skip this KB until the document reaches a terminal state.',
+      lastTriggeredEmpty: 'No document has been triggered yet.',
     },
     storage: {
       title: 'Storage Engine',

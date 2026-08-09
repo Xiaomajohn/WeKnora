@@ -209,6 +209,7 @@ const unsupportedFileTypes = computed<string[]>(() => {
 })
 
 const goToParserSettings = () => {
+  if (!canManage.value) return
   if (kbId.value) {
     uiStore.openKBSettings(kbId.value, 'parser')
   }
@@ -268,6 +269,18 @@ const canEdit = computed(() => {
   return orgStore.canEditKB(kbId.value, false);
 });
 
+// 上传知识是独立的内容新增能力：本空间要求 Contributor+，跨空间还必须
+// 具备共享 KB 的 Editor+ 权限。它不授予已有文档编辑、删除或 KB 设置权限。
+const canUpload = computed(() => {
+  if (!authStore.hasRole('contributor')) return false;
+  if (isViaShare.value) return orgStore.canEditKB(kbId.value, false);
+  const sharedPermission = kbInfo.value?.my_permission || '';
+  if (sharedPermission) {
+    return sharedPermission === 'admin' || sharedPermission === 'editor';
+  }
+  return true;
+});
+
 // Can manage (delete, settings, etc.): same isViaShare-first rule. For
 // shared KBs only an 'admin' share grant qualifies — editor/viewer (and
 // even being the creator viewed via share) never grant delete/settings.
@@ -302,7 +315,7 @@ let { cardList, total, moreIndex, details, getKnowled, delKnowledge, openMore, o
 const showKbDetailContextualGuide = computed(() => {
   return Boolean(kbId.value)
     && !isFAQ.value
-    && canEdit.value
+    && canUpload.value
     && !docListLoading.value
     && cardList.value.length === 0;
 });
@@ -476,6 +489,109 @@ const confirmBatchReparse = async () => {
   }
 };
 
+// "批量解析" — only targets documents that have NOT yet been parsed
+// (uploaded / pending). Reuses the same /batch-reparse endpoint as
+// confirmBatchReparse: the backend treats /reparse as idempotent on
+// parse_status, so sending a reparse on an `uploaded` row simply moves
+// it to `processing`. We narrow the selection here so the user only
+// gets the count they expect on the toast.
+//
+// Strict-serial mode: a small dialog pops first so the user can pick
+// parallel vs strict-serial vs "use system default". The chosen
+// boolean (or undefined for "use system default") is forwarded to
+// the API; the backend then either uses it directly (override) or
+// falls back to the parser.batch_reparse_mode system setting.
+const batchParseModeDialogVisible = ref(false);
+type BatchParseModeChoice = 'default' | 'parallel' | 'serial';
+const batchParseModeChoice = ref<BatchParseModeChoice>('default');
+const batchParseModePreview = ref<{ eligibleIds: string[]; skipped: number } | null>(null);
+
+const openBatchParseDialog = () => {
+  if (batchReparsing.value || batchDeleting.value) return;
+  if (selectedIds.value.size === 0) return;
+  // Pre-compute the eligible count and skipped count so the dialog
+  // can show the user what will actually be enqueued, not just the
+  // raw selection size. The selection is re-evaluated inside
+  // confirmBatchParse for the authoritative filter (avoids TOCTOU
+  // between dialog open and submit).
+  const allIds = Array.from(selectedIds.value);
+  const eligible = allIds.filter((id) => {
+    const item = cardList.value.find((c) => c.id === id);
+    return item && (item.parse_status === 'uploaded' || item.parse_status === 'pending');
+  });
+  const skipped = allIds.length - eligible.length;
+  batchParseModePreview.value = { eligibleIds: eligible, skipped };
+  // Reset the choice to "use system default" every time the dialog
+  // opens so a previous "strict serial" click does not stick.
+  batchParseModeChoice.value = 'default';
+  batchParseModeDialogVisible.value = true;
+};
+
+const confirmBatchParse = async () => {
+  if (batchReparsing.value || batchDeleting.value || selectedIds.value.size === 0) return;
+  // Only uploaded / pending are eligible. uploaded = not yet picked up
+  // by scheduler; pending = already in queue but harmless to nudge
+  // forward through the same endpoint.
+  const parseableIds = Array.from(selectedIds.value).filter((id) => {
+    const item = cardList.value.find((c) => c.id === id);
+    return item && (item.parse_status === 'uploaded' || item.parse_status === 'pending');
+  });
+  if (parseableIds.length === 0) {
+    batchParseModeDialogVisible.value = false;
+    MessagePlugin.info(t('knowledgeBase.batchParseNoEligible'));
+    return;
+  }
+  const skipped = selectedIds.value.size - parseableIds.length;
+  if (skipped > 0) {
+    MessagePlugin.warning(t('knowledgeBase.batchParseSkippedNotEligible', { count: skipped }));
+  }
+  // Map the dialog choice to the wire value. "default" leaves the
+  // field unset so the backend honours parser.batch_reparse_mode;
+  // "parallel" / "serial" force the explicit override.
+  const choice = batchParseModeChoice.value;
+  const serialParam: boolean | undefined =
+    choice === 'default' ? undefined : choice === 'serial';
+  batchReparsing.value = true;
+  batchParseModeDialogVisible.value = false;
+  try {
+    const res: any = await batchReparseKnowledge(kbId.value, parseableIds, undefined, serialParam);
+    if (res?.success) {
+      MessagePlugin.success(t('knowledgeBase.batchParseSuccess', { count: parseableIds.length }));
+      const effectiveSerial = res?.data?.serial === true;
+      if (effectiveSerial) {
+        // 严格串行时，后端只会提交当前文档；未轮到的文档必须保持
+        // 原状态，因此不能把整个批次乐观地显示为 pending。
+        void loadKnowledgeFiles(kbId.value);
+      } else {
+        applyOptimisticBatchReparse(parseableIds);
+        void awaitBatchReparseReflection(parseableIds);
+      }
+      clearSelection();
+      batchMode.value = false;
+      scheduleWikiStatusProbes();
+    } else {
+      MessagePlugin.error(res?.message || t('knowledgeBase.batchParseFailed'));
+    }
+  } catch (e: any) {
+    MessagePlugin.error(e?.message || t('knowledgeBase.batchParseFailed'));
+  } finally {
+    batchReparsing.value = false;
+  }
+};
+
+// Computed: number of selected rows in parseable states. Used by the
+// DocumentBatchBar to enable/disable the "批量解析" button.
+const selectedParseableCount = computed(() => {
+  let n = 0;
+  for (const id of selectedIds.value) {
+    const item = cardList.value.find((c) => c.id === id);
+    if (item && (item.parse_status === 'uploaded' || item.parse_status === 'pending')) {
+      n++;
+    }
+  }
+  return n;
+});
+
 const tagFilterPanelVisible = ref(false);
 const tagFilterTriggerHover = ref(false);
 const tagFilterCleared = ref(false);
@@ -524,6 +640,7 @@ const fileTypeOptions = computed(() => [
 const selectedParseStatus = ref('');
 const parseStatusOptions = computed(() => [
   { label: t('knowledgeBase.allParseStatuses'), value: '' },
+  { label: t('knowledgeBase.parseStatusUploaded'), value: 'uploaded' },
   { label: t('knowledgeBase.parseStatusPending'), value: 'pending' },
   { label: t('knowledgeBase.parseStatusProcessing'), value: 'processing' },
   { label: t('knowledgeBase.parseStatusCompleted'), value: 'completed' },
@@ -1311,6 +1428,7 @@ const documentTitle = computed(() => {
 });
 
 const ensureDocumentKbReady = () => {
+  if (!canUpload.value) return false;
   if (isFAQ.value) {
     MessagePlugin.warning(t('knowledgeBase.operationNotSupportedForType'));
     return false;
@@ -1387,7 +1505,7 @@ const showUploadResultMessages = (
 
 const executeUploadBatch = async (
   files: File[],
-  options: { processConfig?: KnowledgeProcessOverrides } = {},
+  options: { processConfig?: KnowledgeProcessOverrides; autoParse?: boolean | null } = {},
 ) => {
   const targetKbId = kbId.value;
   if (!targetKbId || files.length === 0) {
@@ -1410,12 +1528,19 @@ const executeUploadBatch = async (
         tag_ids?: string[]
         fileName?: string
         process_config?: KnowledgeProcessOverrides
+        auto_parse?: boolean
       } = { file, tag_ids: tagIdsToUpload };
 
       const fileName = getFolderUploadFileName(file);
       if (fileName) uploadData.fileName = fileName;
       if (options.processConfig) {
         uploadData.process_config = options.processConfig;
+      }
+      // Only forward auto_parse when explicitly set; passing undefined
+      // keeps the backend default (true) intact for callers that don't
+      // care.
+      if (typeof options.autoParse === 'boolean') {
+        uploadData.auto_parse = options.autoParse;
       }
 
       const responseData: any = await uploadKnowledgeFile(targetKbId, uploadData);
@@ -1459,7 +1584,11 @@ const executeUploadBatch = async (
   return { successCount, failCount };
 };
 
-const executeUrlImport = async (url: string, processConfig?: KnowledgeProcessOverrides) => {
+const executeUrlImport = async (
+  url: string,
+  processConfig?: KnowledgeProcessOverrides,
+  autoParse?: boolean | null,
+) => {
   const targetKbId = kbId.value;
   if (!targetKbId) {
     MessagePlugin.error(t('error.missingKbId'));
@@ -1472,6 +1601,9 @@ const executeUrlImport = async (url: string, processConfig?: KnowledgeProcessOve
       url,
       tag_ids: tagIdsToUpload,
       process_config: processConfig,
+      // Only include auto_parse when the dialog explicitly chose a
+      // value; otherwise omit so the backend uses its default (true).
+      auto_parse: typeof autoParse === 'boolean' ? autoParse : undefined,
     });
     window.dispatchEvent(new CustomEvent('knowledgeFileUploaded', {
       detail: { kbId: targetKbId },
@@ -1508,6 +1640,10 @@ const handleUploadConfirmResult = async (result: UploadConfirmResult) => {
   const files = result.files || [];
   const urls = result.urls || [];
   const processConfig = result.processConfig;
+  // autoParse is undefined when the dialog isn't in our extended UI
+  // surface (e.g. programmatic reparse path); fall back to backend
+  // default by passing undefined.
+  const autoParse = result.autoParse;
 
   if (files.length > 0) {
     const hasFolderPaths = files.some((file) => {
@@ -1517,11 +1653,11 @@ const handleUploadConfirmResult = async (result: UploadConfirmResult) => {
     if (hasFolderPaths) {
       MessagePlugin.info(t('knowledgeBase.uploadingFolder', { total: files.length }));
     }
-    await executeUploadBatch(files, { processConfig });
+    await executeUploadBatch(files, { processConfig, autoParse });
   }
 
   for (const url of urls) {
-    await executeUrlImport(url, processConfig);
+    await executeUrlImport(url, processConfig, autoParse);
   }
 };
 
@@ -1565,6 +1701,7 @@ const handleManualCreate = () => {
 };
 
 const handleOpenKBSettings = () => {
+  if (!canManage.value) return;
   if (!kbId.value) {
     MessagePlugin.warning(t('knowledgeEditor.messages.missingId'));
     return;
@@ -2200,7 +2337,7 @@ async function createNewSession(value: string): Promise<void> {
                       </button>
                     </t-tooltip>
                   </div>
-                  <div v-if="canEdit" class="doc-filter-actions">
+                  <div v-if="canUpload" class="doc-filter-actions">
                     <KbUploadSourceDropdown ref="uploadSourceRef" :accept-file-types="acceptFileTypes"
                       :supported-file-types="[...supportedFileTypes]" include-manual trigger-icon="file-add"
                       trigger-class="content-bar-icon-btn" data-guide="kb-detail-add-doc"
@@ -2285,8 +2422,10 @@ async function createNewSession(value: string): Promise<void> {
               </div>
               <div class="doc-batch-bar-anchor" v-show="batchMode || selectedIds.size > 0">
                 <DocumentBatchBar :count="selectedIds.size" :delete-loading="batchDeleting"
-                  :reparse-loading="batchReparsing" :visible="batchMode || selectedIds.size > 0"
-                  @cancel="handleBatchCancel" @delete="confirmBatchDelete" @reparse="confirmBatchReparse" />
+                  :reparse-loading="batchReparsing" :parse-count="selectedParseableCount"
+                  :visible="batchMode || selectedIds.size > 0"
+                  @cancel="handleBatchCancel" @delete="confirmBatchDelete" @reparse="confirmBatchReparse"
+                  @parse="openBatchParseDialog" />
               </div>
             </div>
           </div>
@@ -2325,6 +2464,76 @@ async function createNewSession(value: string): Promise<void> {
     :is-faq="isFAQ"
     @changed="onTagManageChanged"
   />
+
+  <!-- 批量解析模式选择弹窗：用户在系统默认 / 并行 / 严格串行 三个选项中选一个。
+       "使用系统默认" 会把 serial 字段留空，由后端读取
+       parser.batch_reparse_mode 设置；其他两个会强制覆盖。 -->
+  <t-dialog
+    v-model:visible="batchParseModeDialogVisible"
+    :header="t('knowledgeBase.batchParseModeTitle')"
+    :confirm-btn="{
+      content: t('knowledgeBase.batchParseConfirm'),
+      theme: 'primary',
+      loading: batchReparsing,
+      disabled: batchReparsing,
+    }"
+    :cancel-btn="t('common.cancel')"
+    :close-on-overlay-click="!batchReparsing"
+    width="480px"
+    @confirm="confirmBatchParse"
+  >
+    <div class="batch-parse-mode-dialog">
+      <p class="batch-parse-mode-hint">
+        {{ t('knowledgeBase.batchParseModeHint') }}
+      </p>
+      <div class="batch-parse-mode-summary">
+        <span>{{ t('knowledgeBase.batchParseTooltip', {
+          count: batchParseModePreview?.eligibleIds.length ?? 0,
+        }) }}</span>
+        <span v-if="batchParseModePreview && batchParseModePreview.skipped > 0" class="batch-parse-mode-skipped">
+          {{ t('knowledgeBase.batchParseSkippedNotEligible', {
+            count: batchParseModePreview.skipped,
+          }) }}
+        </span>
+      </div>
+      <t-radio-group
+        v-model="batchParseModeChoice"
+        class="batch-parse-mode-radio-group"
+        :disabled="batchReparsing"
+      >
+        <t-radio-button value="default">
+          <div class="batch-parse-mode-option">
+            <div class="batch-parse-mode-option-label">
+              {{ t('knowledgeBase.batchParseModeUseDefault') }}
+            </div>
+            <div class="batch-parse-mode-option-hint">
+              {{ t('knowledgeBase.batchParseModeUseDefaultHint') }}
+            </div>
+          </div>
+        </t-radio-button>
+        <t-radio-button value="parallel">
+          <div class="batch-parse-mode-option">
+            <div class="batch-parse-mode-option-label">
+              {{ t('knowledgeBase.batchParseModeParallel') }}
+            </div>
+            <div class="batch-parse-mode-option-hint">
+              {{ t('knowledgeBase.batchParseModeHint') }}
+            </div>
+          </div>
+        </t-radio-button>
+        <t-radio-button value="serial">
+          <div class="batch-parse-mode-option">
+            <div class="batch-parse-mode-option-label">
+              {{ t('knowledgeBase.batchParseModeSerial') }}
+            </div>
+            <div class="batch-parse-mode-option-hint">
+              {{ t('knowledgeBase.batchParseModeHint') }}
+            </div>
+          </div>
+        </t-radio-button>
+      </t-radio-group>
+    </div>
+  </t-dialog>
 </template>
 <style>
 /* 下拉菜单容器样式已统一至 @/assets/dropdown-menu.less */
@@ -2368,6 +2577,74 @@ async function createNewSession(value: string): Promise<void> {
 .tag-more-popup .tag-menu-item:hover {
   background: var(--td-bg-color-secondarycontainer);
   color: var(--td-text-color-primary);
+}
+
+/* 批量解析模式选择弹窗：紧凑的说明 + 垂直堆叠的单选按钮组。 */
+.batch-parse-mode-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+
+  .batch-parse-mode-hint {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--td-text-color-secondary);
+  }
+
+  .batch-parse-mode-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 13px;
+    color: var(--td-text-color-primary);
+
+    .batch-parse-mode-skipped {
+      color: var(--td-text-color-placeholder);
+    }
+  }
+
+  .batch-parse-mode-radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    /* 覆写 TDesign 默认的横向布局：这里三个选项互斥地
+       表达不同的“批量执行策略”，竖排更易阅读其差异。 */
+    flex-wrap: nowrap;
+  }
+
+  .batch-parse-mode-radio-group :deep(.t-radio-button) {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: 1px solid var(--td-component-stroke);
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin: 0;
+  }
+
+  .batch-parse-mode-radio-group :deep(.t-radio-button.t-is-checked) {
+    border-color: var(--td-brand-color);
+    background-color: var(--td-brand-color-light);
+  }
+
+  .batch-parse-mode-option {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    .batch-parse-mode-option-label {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--td-text-color-primary);
+    }
+
+    .batch-parse-mode-option-hint {
+      font-size: 12px;
+      color: var(--td-text-color-secondary);
+      line-height: 1.5;
+    }
+  }
 }
 </style>
 <style scoped lang="less">

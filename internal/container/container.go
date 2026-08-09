@@ -275,6 +275,10 @@ func BuildContainer(container *dig.Container) *dig.Container {
 		must(container.Provide(router.NewMaintenanceAsynqServer, dig.Name("maintenanceAsynqServer")))
 		must(container.Provide(router.NewSharedAsynqServer, dig.Name("sharedAsynqServer")))
 		must(container.Provide(router.NewWikiAsynqServer, dig.Name("wikiAsynqServer")))
+		// Serial pool: concurrency=1 lane for strict-serial batch reparses.
+		// Idling is essentially free (1 goroutine), so always provision it
+		// alongside the other pools rather than gating on a setting.
+		must(container.Provide(router.NewSerialAsynqServer, dig.Name("serialAsynqServer")))
 		// Asynq inspector for cancel-by-knowledge-id (best-effort
 		// dequeue of pending/scheduled/retry tasks + active-task cancel).
 		must(container.Provide(router.NewAsynqInspector))

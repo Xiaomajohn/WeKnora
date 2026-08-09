@@ -23,10 +23,22 @@ import (
 	"github.com/hibiken/asynq"
 )
 
-// CreateKnowledgeFromFile creates a knowledge entry from an uploaded file
+// CreateKnowledgeFromFile creates a knowledge entry from an uploaded file.
+//
+// autoParse controls whether the document is auto-enqueued for parsing once
+// the file is persisted:
+//   - nil or true (default, historical behavior): the file is stored AND a
+//     TypeDocumentProcess task is enqueued immediately. ParseStatus becomes
+//     "pending". All existing callers pass nil and continue to work.
+//   - false: the file is stored but NO parse task is enqueued. ParseStatus
+//     becomes "uploaded" and the document waits for a manual /reparse call
+//     to start parsing. Useful for users with strict upstream embedding RPM
+//     limits who want to batch uploads and trigger parsing on demand.
+//     No background process auto-promotes uploaded rows.
 func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 	kbID string, file *multipart.FileHeader, metadata map[string]string, enableMultimodel *bool, customFileName string, tagIDs []string, channel string,
 	processOverrides *types.KnowledgeProcessOverrides,
+	autoParse *bool,
 ) (*types.Knowledge, error) {
 	logger.Info(ctx, "Start creating knowledge from file")
 
@@ -67,6 +79,18 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 		logger.Error(ctx, "Invalid file type")
 		return nil, ErrInvalidFileType
 	}
+
+	// Legacy .doc uploads may actually contain MIME/MHTML mail archives. Normalize
+	// those files to a real DOCX before hashing, deduplication, persistence, and
+	// parser task creation so malformed content can never reach antiword.
+	normalizedUpload, err := preprocessLegacyDocUpload(ctx, file, fileName)
+	if err != nil {
+		logger.Errorf(ctx, "Failed to normalize uploaded document: %v", err)
+		return nil, err
+	}
+	defer normalizedUpload.cleanup()
+	file = normalizedUpload.file
+	fileName = normalizedUpload.fileName
 
 	// Calculate file hash for deduplication
 	logger.Info(ctx, "Calculating file hash")
@@ -184,6 +208,17 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 
 	// Prepare knowledge record
 	logger.Info(ctx, "Preparing knowledge record")
+	// Resolve autoParse default: nil/true means "parse immediately" (legacy
+	// behavior). Only an explicit false skips enqueue and leaves the row in
+	// "uploaded" state for the parser scheduler (or manual reparse) to pick up.
+	autoParseValue := true
+	if autoParse != nil {
+		autoParseValue = *autoParse
+	}
+	initialParseStatus := types.ParseStatusPending
+	if !autoParseValue {
+		initialParseStatus = types.ParseStatusUploaded
+	}
 	knowledge := &types.Knowledge{
 		ID:               uuid.New().String(),
 		TenantID:         tenantID,
@@ -195,7 +230,7 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 		FileType:         getFileType(safeFilename),
 		FileSize:         file.Size,
 		FileHash:         hash,
-		ParseStatus:      "pending",
+		ParseStatus:      initialParseStatus,
 		EnableStatus:     "disabled",
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
@@ -234,6 +269,20 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 	if err := s.setAndAttachKnowledgeTags(ctx, tenantID, kbID, knowledge, tagIDs); err != nil {
 		logger.Errorf(ctx, "Failed to set knowledge tags, knowledge ID: %s, error: %v", knowledge.ID, err)
 		return nil, err
+	}
+
+	// autoParse=false: file is stored but parsing is deferred. The document
+	// stays in the "uploaded" state until the user triggers /reparse
+	// manually (single or /batch-reparse) or the per-KB scheduled_rebuild
+	// scheduler picks it up. No background process will auto-promote these
+	// rows. Return early so we never touch asynq. This is the entire
+	// purpose of the auto_parse=false path.
+	if !autoParseValue {
+		logger.Infof(ctx,
+			"Knowledge created without auto-parse (auto_parse=false), ID: %s, status=%s, awaiting manual /reparse",
+			knowledge.ID, knowledge.ParseStatus,
+		)
+		return knowledge, nil
 	}
 
 	// Enqueue document processing task to Asynq
@@ -314,14 +363,22 @@ func isFileURL(rawURL, fileName, fileType string) bool {
 func (s *knowledgeService) CreateKnowledgeFromURL(ctx context.Context,
 	kbID string, rawURL string, fileName string, fileType string, enableMultimodel *bool, title string, tagIDs []string, channel string,
 	processOverrides *types.KnowledgeProcessOverrides,
+	autoParse *bool,
 ) (*types.Knowledge, error) {
 	logger.Info(ctx, "Start creating knowledge from URL")
 	logger.Infof(ctx, "Knowledge base ID: %s, URL: %s", kbID, rawURL)
 
+	// Resolve autoParse default: nil/true keeps the legacy "parse now"
+	// behavior; explicit false defers parsing to the parser scheduler.
+	autoParseValue := true
+	if autoParse != nil {
+		autoParseValue = *autoParse
+	}
+
 	// Route to file_url logic when the URL points to a downloadable file
 	if isFileURL(rawURL, fileName, fileType) {
 		return s.createKnowledgeFromFileURL(
-			ctx, kbID, rawURL, fileName, fileType, enableMultimodel, title, tagIDs, channel, processOverrides,
+			ctx, kbID, rawURL, fileName, fileType, enableMultimodel, title, tagIDs, channel, processOverrides, autoParseValue,
 		)
 	}
 
@@ -386,6 +443,10 @@ func (s *knowledgeService) CreateKnowledgeFromURL(ctx context.Context,
 
 	// Create knowledge record
 	logger.Info(ctx, "Creating knowledge record")
+	initialParseStatus := types.ParseStatusPending
+	if !autoParseValue {
+		initialParseStatus = types.ParseStatusUploaded
+	}
 	knowledge := &types.Knowledge{
 		ID:               uuid.New().String(),
 		TenantID:         tenantID,
@@ -396,7 +457,7 @@ func (s *knowledgeService) CreateKnowledgeFromURL(ctx context.Context,
 		Source:           url,
 		FileType:         "html",
 		FileHash:         fileHash,
-		ParseStatus:      "pending",
+		ParseStatus:      initialParseStatus,
 		EnableStatus:     "disabled",
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
@@ -419,6 +480,15 @@ func (s *knowledgeService) CreateKnowledgeFromURL(ctx context.Context,
 	if err := s.setAndAttachKnowledgeTags(ctx, tenantID, kbID, knowledge, tagIDs); err != nil {
 		logger.Errorf(ctx, "Failed to set knowledge tags, knowledge ID: %s, error: %v", knowledge.ID, err)
 		return nil, err
+	}
+
+	// autoParse=false: defer parsing to the scheduler (or manual reparse).
+	if !autoParseValue {
+		logger.Infof(ctx,
+			"Knowledge from URL created without auto-parse, ID: %s, status=%s, waiting for scheduler or manual reparse",
+			knowledge.ID, knowledge.ParseStatus,
+		)
+		return knowledge, nil
 	}
 
 	// Enqueue URL processing task to Asynq
@@ -525,6 +595,7 @@ func (s *knowledgeService) createKnowledgeFromFileURL(
 	tagIDs []string,
 	channel string,
 	processOverrides *types.KnowledgeProcessOverrides,
+	autoParse bool,
 ) (*types.Knowledge, error) {
 	logger.Info(ctx, "Start creating knowledge from file URL")
 	logger.Infof(ctx, "Knowledge base ID: %s, file URL: %s", kbID, fileURL)
@@ -612,6 +683,10 @@ func (s *knowledgeService) createKnowledgeFromFileURL(
 	}
 
 	// Create knowledge record
+	initialParseStatus := types.ParseStatusPending
+	if !autoParse {
+		initialParseStatus = types.ParseStatusUploaded
+	}
 	knowledge := &types.Knowledge{
 		ID:               uuid.New().String(),
 		TenantID:         tenantID,
@@ -623,7 +698,7 @@ func (s *knowledgeService) createKnowledgeFromFileURL(
 		FileType:         fileType,
 		Source:           fileURL,
 		FileHash:         fileHash,
-		ParseStatus:      "pending",
+		ParseStatus:      initialParseStatus,
 		EnableStatus:     "disabled",
 		CreatedAt:        time.Now(),
 		UpdatedAt:        time.Now(),
@@ -657,6 +732,15 @@ func (s *knowledgeService) createKnowledgeFromFileURL(
 	if err := s.setAndAttachKnowledgeTags(ctx, tenantID, kbID, knowledge, tagIDs); err != nil {
 		logger.Errorf(ctx, "Failed to set knowledge tags, knowledge ID: %s, error: %v", knowledge.ID, err)
 		return nil, err
+	}
+
+	// autoParse=false: defer parsing to the scheduler (or manual reparse).
+	if !autoParse {
+		logger.Infof(ctx,
+			"Knowledge from file URL created without auto-parse, ID: %s, status=%s, waiting for scheduler or manual reparse",
+			knowledge.ID, knowledge.ParseStatus,
+		)
+		return knowledge, nil
 	}
 
 	// Build async task payload
@@ -721,8 +805,17 @@ func (s *knowledgeService) CreateKnowledgeFromPassageSync(ctx context.Context,
 // CreateKnowledgeFromManual creates or saves manual Markdown knowledge content.
 func (s *knowledgeService) CreateKnowledgeFromManual(ctx context.Context,
 	kbID string, payload *types.ManualKnowledgePayload, channel string,
+	autoParse *bool,
 ) (*types.Knowledge, error) {
 	logger.Info(ctx, "Start creating manual knowledge entry")
+
+	// Resolve autoParse default: nil/true keeps the legacy "parse on publish"
+	// behavior; explicit false leaves the row in "uploaded" state until the
+	// parser scheduler (or manual reparse) picks it up.
+	autoParseValue := true
+	if autoParse != nil {
+		autoParseValue = *autoParse
+	}
 
 	if payload == nil {
 		return nil, werrors.NewBadRequestError("请求内容不能为空")
@@ -792,7 +885,14 @@ func (s *knowledgeService) CreateKnowledgeFromManual(ctx context.Context,
 	knowledge.EnsureManualDefaults()
 
 	if status == types.ManualKnowledgeStatusPublish {
-		knowledge.ParseStatus = "pending"
+		// For published manual knowledge: respect autoParse. nil/true → pending
+		// (default, legacy behavior); explicit false → "uploaded" so the
+		// parser scheduler (or manual reparse) picks it up later.
+		if autoParseValue {
+			knowledge.ParseStatus = types.ParseStatusPending
+		} else {
+			knowledge.ParseStatus = types.ParseStatusUploaded
+		}
 	}
 
 	if status == types.ManualKnowledgeStatusPublish {
@@ -813,8 +913,22 @@ func (s *knowledgeService) CreateKnowledgeFromManual(ctx context.Context,
 	}
 
 	if status == types.ManualKnowledgeStatusPublish {
+		// autoParse=false: leave the row in "uploaded" state. The parser
+		// scheduler or a manual /reparse will start processing later.
+		if !autoParseValue {
+			logger.Infof(ctx,
+				"Manual knowledge created without auto-parse, ID: %s, status=%s, waiting for scheduler or manual reparse",
+				knowledge.ID, knowledge.ParseStatus,
+			)
+			return knowledge, nil
+		}
 		logger.Infof(ctx, "Manual knowledge created, enqueuing async processing task, ID: %s", knowledge.ID)
-		if err := s.enqueueManualProcessing(ctx, knowledge, cleanContent, false); err != nil {
+		// Create-time enqueue always goes through the normal core
+		// queue. Strict-serial mode is only relevant for the
+		// /batch-reparse / /reparse paths; here the user just
+		// submitted a single document, so they want the same fast
+		// path as any other one-off upload.
+		if err := s.enqueueManualProcessing(ctx, knowledge, cleanContent, false, false); err != nil {
 			logger.Errorf(ctx, "Failed to enqueue manual processing task for new knowledge: %v", err)
 			// Non-fatal: mark as failed so user can retry
 			knowledge.ParseStatus = "failed"
@@ -1040,7 +1154,10 @@ func (s *knowledgeService) UpdateManualKnowledge(ctx context.Context,
 	}
 
 	logger.Infof(ctx, "Manual knowledge updated, enqueuing async processing task, ID: %s", existing.ID)
-	if err := s.enqueueManualProcessing(ctx, existing, cleanContent, true); err != nil {
+	// Update-time enqueue also uses the normal core queue — see the
+	// matching comment on the create-time enqueue above for why
+	// strict-serial mode is reserved for the reparse paths.
+	if err := s.enqueueManualProcessing(ctx, existing, cleanContent, true, false); err != nil {
 		logger.Errorf(ctx, "Failed to enqueue manual processing task: %v", err)
 		// Non-fatal: mark as failed so user can retry
 		existing.ParseStatus = "failed"
@@ -1052,8 +1169,13 @@ func (s *knowledgeService) UpdateManualKnowledge(ctx context.Context,
 }
 
 // enqueueManualProcessing enqueues a manual:process Asynq task for async cleanup + re-indexing.
+//
+// `serial` routes the task to QueueCoreSerial (a dedicated single-worker
+// pool) when true, or to the normal core queue when false. Used by the
+// strict-serial batch reparse path so manual knowledge rows also process
+// one-at-a-time when the user picks serial mode.
 func (s *knowledgeService) enqueueManualProcessing(ctx context.Context,
-	knowledge *types.Knowledge, content string, needCleanup bool,
+	knowledge *types.Knowledge, content string, needCleanup bool, serial bool,
 ) error {
 	requestID, _ := types.RequestIDFromContext(ctx)
 	payload := types.ManualProcessPayload{
@@ -1070,13 +1192,18 @@ func (s *knowledgeService) enqueueManualProcessing(ctx context.Context,
 		return fmt.Errorf("failed to marshal manual process payload: %w", err)
 	}
 
+	queue := types.QueueDefault
+	if serial {
+		queue = types.QueueCoreSerial
+	}
 	task := asynq.NewTask(types.TypeManualProcess, payloadBytes,
-		asynq.Queue(types.QueueDefault), asynq.MaxRetry(3), asynq.Timeout(30*time.Minute))
+		asynq.Queue(queue), asynq.MaxRetry(3), asynq.Timeout(30*time.Minute))
 	info, err := s.task.Enqueue(task)
 	if err != nil {
 		return fmt.Errorf("failed to enqueue manual process task: %w", err)
 	}
-	logger.Infof(ctx, "Enqueued manual process task: knowledge_id=%s, asynq_id=%s", knowledge.ID, info.ID)
+	logger.Infof(ctx, "Enqueued manual process task: knowledge_id=%s, asynq_id=%s, queue=%s, serial=%t",
+		knowledge.ID, info.ID, queue, serial)
 	return nil
 }
 

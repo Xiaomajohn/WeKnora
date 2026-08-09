@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"mime/multipart"
+	"time"
 
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/hibiken/asynq"
@@ -13,6 +14,15 @@ import (
 type KnowledgeService interface {
 	// CreateKnowledgeFromFile creates knowledge from a file.
 	// channel identifies the ingestion channel (e.g. "web", "api", "wechat"); empty defaults to "web".
+	// autoParse controls whether the document is auto-enqueued for parsing
+	// after the file is persisted:
+	//   - nil or true (default): the file is stored AND a TypeDocumentProcess
+	//     task is enqueued immediately. ParseStatus becomes "pending".
+	//     This preserves the historical behavior for every existing caller.
+	//   - false: the file is stored but NO parse task is enqueued.
+	//     ParseStatus becomes "uploaded" and the document waits for a
+	//     manual /reparse to start parsing. There is no background
+	//     process that auto-promotes uploaded rows.
 	CreateKnowledgeFromFile(
 		ctx context.Context,
 		kbID string,
@@ -23,11 +33,13 @@ type KnowledgeService interface {
 		tagIDs []string,
 		channel string,
 		processOverrides *types.KnowledgeProcessOverrides,
+		autoParse *bool,
 	) (*types.Knowledge, error)
 	// CreateKnowledgeFromURL creates knowledge from a URL.
 	// When fileName or fileType is provided (or the URL path has a known file extension),
 	// the URL is treated as a direct file download instead of a web page crawl.
 	// channel identifies the ingestion channel; empty defaults to "web".
+	// autoParse has the same semantics as CreateKnowledgeFromFile.
 	CreateKnowledgeFromURL(
 		ctx context.Context,
 		kbID string,
@@ -39,6 +51,7 @@ type KnowledgeService interface {
 		tagIDs []string,
 		channel string,
 		processOverrides *types.KnowledgeProcessOverrides,
+		autoParse *bool,
 	) (*types.Knowledge, error)
 	// CreateKnowledgeFromPassage creates knowledge from text passages.
 	// channel identifies the ingestion channel; empty defaults to "web".
@@ -47,11 +60,15 @@ type KnowledgeService interface {
 	CreateKnowledgeFromPassageSync(ctx context.Context, kbID string, passage []string, channel string) (*types.Knowledge, error)
 	// CreateKnowledgeFromManual creates or saves manual Markdown knowledge content.
 	// channel identifies the ingestion channel; empty defaults to "web".
+	// autoParse has the same semantics as CreateKnowledgeFromFile: nil/true
+	// (default) enqueues the manual-process task; false leaves the row in
+	// "uploaded" state until the parser scheduler picks it up.
 	CreateKnowledgeFromManual(
 		ctx context.Context,
 		kbID string,
 		payload *types.ManualKnowledgePayload,
 		channel string,
+		autoParse *bool,
 	) (*types.Knowledge, error)
 	// GetKnowledgeByID retrieves knowledge by ID (uses tenant from context).
 	GetKnowledgeByID(ctx context.Context, id string) (*types.Knowledge, error)
@@ -101,10 +118,26 @@ type KnowledgeService interface {
 	// ReparseKnowledge deletes existing document content and re-parses the knowledge asynchronously.
 	// When processOverrides is non-nil, it is validated and persisted to the knowledge metadata
 	// before re-parsing, letting callers adjust parse config on reparse; nil keeps stored overrides.
+	//
+	// When serial is true the resulting document:process task is enqueued on
+	// the dedicated QueueCoreSerial single-worker pool, guaranteeing
+	// one-at-a-time execution. The maintenance worker (and the parser
+	// scheduler) propagate the user's per-batch choice down through this
+	// parameter — see KnowledgeListReparsePayload.Serial.
+	//
+	// useKBConfigOnly forces the reparse to use the KB's current configuration
+	// as the sole source of truth, ignoring both the caller-supplied
+	// processOverrides and any overrides persisted on the document's metadata
+	// from earlier uploads. It also clears the persisted overrides from
+	// metadata so subsequent reparses stay in sync with the KB config.
+	// This is the contract for the scheduled rebuild scheduler and the manual
+	// reparse handlers — KB config must always be authoritative.
 	ReparseKnowledge(
 		ctx context.Context,
 		knowledgeID string,
 		processOverrides *types.KnowledgeProcessOverrides,
+		serial bool,
+		useKBConfigOnly bool,
 	) (*types.Knowledge, error)
 	// CancelKnowledgeParse marks an in-progress parse as cancelled by the
 	// user. The knowledge row and any partially written chunks/index are
@@ -257,6 +290,31 @@ type KnowledgeRepository interface {
 	CountKnowledgeByKnowledgeBaseID(ctx context.Context, tenantID uint64, kbID string) (int64, error)
 	// CountKnowledgeByStatus counts the number of knowledge items with the specified parse status.
 	CountKnowledgeByStatus(ctx context.Context, tenantID uint64, kbID string, parseStatuses []string) (int64, error)
+	// ListKnowledgeByStatus returns knowledge IDs matching the given parse
+	// statuses, ordered by created_at ASC. Used by the in-process parser
+	// scheduler to pick the next "uploaded" document to promote. kbID=""
+	// means all KBs in the tenant (cross-tenant queries are NOT supported
+	// here; pass tenantID explicitly when kbID is empty).
+	ListKnowledgeByStatus(
+		ctx context.Context,
+		tenantID uint64,
+		kbID string,
+		parseStatuses []string,
+		limit int,
+	) ([]*types.Knowledge, error)
+	// ListKnowledgeForRepair returns failed (or otherwise non-terminal) knowledge
+	// rows whose updated_at is older than minAgeBefore, ordered oldest-first.
+	// Used by the in-process knowledge-repair scheduler
+	// (knowledge_repair_scheduler.go) to find stale-failed candidates. Pass
+	// the zero time.Time{} to disable the age filter.
+	ListKnowledgeForRepair(
+		ctx context.Context,
+		tenantID uint64,
+		kbID string,
+		parseStatuses []string,
+		minAgeBefore time.Time,
+		limit int,
+	) ([]*types.Knowledge, error)
 	// SearchKnowledge searches knowledge items by keyword across the tenant.
 	// fileTypes: optional list of file extensions to filter by (e.g., ["csv", "xlsx"])
 	SearchKnowledge(ctx context.Context, tenantID uint64, keyword string, offset, limit int, fileTypes []string) ([]*types.Knowledge, bool, error)

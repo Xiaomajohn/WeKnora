@@ -251,6 +251,14 @@
                   />
                 </div>
 
+                <!-- 定时重建 -->
+                <div v-if="!isFAQ && formData && currentSection === 'scheduledRebuild'" class="section">
+                  <KBScheduledRebuildSettings
+                                        :config="formData.scheduledRebuildConfig"
+                                        @update:config="formData.scheduledRebuildConfig = $event"
+                  />
+                </div>
+
                 <!-- 存储引擎 -->
                 <div v-if="!isFAQ && formData && currentSection === 'storage'" class="section">
                   <KBStorageSettings
@@ -466,6 +474,7 @@ import KBAdvancedSettings from './settings/KBAdvancedSettings.vue'
 import ModelSelector from '@/components/ModelSelector.vue'
 import GraphSettings from './settings/GraphSettings.vue'
 import KBShareSettings from './settings/KBShareSettings.vue'
+import KBScheduledRebuildSettings from './settings/KBScheduledRebuildSettings.vue'
 import DataSourceSettings from './settings/DataSourceSettings.vue'
 import { useI18n } from 'vue-i18n'
 
@@ -595,7 +604,8 @@ const navItems = computed(() => {
       { key: 'storage', icon: 'cloud', label: t('knowledgeEditor.sidebar.storage') },
       { key: 'chunking', icon: 'file-copy', label: t('knowledgeEditor.sidebar.chunking') },
       { key: 'graph', icon: 'chart-bubble', label: t('knowledgeEditor.sidebar.graph') },
-      { key: 'advanced', icon: 'setting', label: t('knowledgeEditor.sidebar.advanced') }
+      { key: 'advanced', icon: 'setting', label: t('knowledgeEditor.sidebar.advanced') },
+      { key: 'scheduledRebuild', icon: 'time', label: t('knowledgeEditor.sidebar.scheduledRebuild') }
     )
     if (props.mode === 'edit' && props.kbId) {
       items.push({ key: 'datasource', icon: 'cloud-download', label: t('knowledgeEditor.sidebar.datasource'), badge: dsCount.value || undefined })
@@ -621,7 +631,7 @@ const navGroups = computed(() => {
     {
       key: 'processing',
       label: t('knowledgeEditor.navGroups.processing'),
-      items: pickItems(['parser', 'chunking', 'multimodal', 'asr', 'graph', 'advanced']),
+            items: pickItems(['parser', 'chunking', 'multimodal', 'asr', 'graph', 'advanced', 'scheduledRebuild']),
     },
     {
       key: 'data',
@@ -753,6 +763,13 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
       contentInstructions: '',
       extractionInstructions: '',
     },
+    scheduledRebuildConfig: {
+      enabled: false,
+      interval_seconds: 60,
+      batch_size: 1,
+      statuses: ['failed'],
+      mode: 'sync',
+    },
     indexingStrategy: {
       vectorEnabled: true,
       keywordEnabled: true,
@@ -874,6 +891,24 @@ const loadKBData = async () => {
         ) as 'focused' | 'standard' | 'exhaustive',
         contentInstructions: kb.wiki_config?.content_instructions || '',
         extractionInstructions: kb.wiki_config?.extraction_instructions || '',
+      },
+      scheduledRebuildConfig: {
+        enabled: !!kb.scheduled_rebuild_config?.enabled,
+        interval_seconds: kb.scheduled_rebuild_config?.interval_seconds || 60,
+        batch_size: kb.scheduled_rebuild_config?.batch_size || 1,
+        statuses: kb.scheduled_rebuild_config?.statuses?.length
+          ? kb.scheduled_rebuild_config.statuses
+          : ['failed'],
+        mode: kb.scheduled_rebuild_config?.mode === 'async' ? 'async' : 'sync',
+        // Snapshot fields — pass through whatever the backend wrote so
+        // the KB editor's "最近触发的文档" panel stays populated when the
+        // operator re-opens the modal. The watcher on the settings
+        // subcomponent already echoes them back into the parent form,
+        // but pre-seeding here avoids a one-frame empty panel between
+        // load and the subcomponent's first emit.
+        last_triggered_knowledge_id: kb.scheduled_rebuild_config?.last_triggered_knowledge_id || '',
+        last_triggered_knowledge_name: kb.scheduled_rebuild_config?.last_triggered_knowledge_name || '',
+        last_triggered_at: kb.scheduled_rebuild_config?.last_triggered_at || null,
       },
       indexingStrategy: {
         vectorEnabled: kb.indexing_strategy?.vector_enabled ?? true,
@@ -1224,6 +1259,8 @@ const buildSubmitData = () => {
     }
   }
 
+    data.scheduled_rebuild_config = formData.value.scheduledRebuildConfig || null
+
   // Send indexing strategy
   if (formData.value.type !== 'faq') {
     data.indexing_strategy = {
@@ -1307,6 +1344,10 @@ const doSubmit = async () => {
       }
 
       // 1. 更新基本信息（名称、描述）和 FAQ/Wiki 配置
+      // 注意：UpdateKnowledgeBase 接口不再接收嵌套 config 子树；
+      // wiki_config / indexing_strategy 改由下面的 updateKBConfig 携带。
+      // 保留 faq_config 子树仅为了与其他分支保持一致（该字段同样在
+      // 后端 UpdateKnowledgeBase 上不生效，作为已知问题暂不改动）。
       const updateConfig: any = {}
       if (formData.value.type === 'faq' && formData.value.faqConfig) {
         updateConfig.faq_config = {
@@ -1314,15 +1355,9 @@ const doSubmit = async () => {
           question_index_mode: formData.value.faqConfig.questionIndexMode || 'separate'
         }
       }
-      if (formData.value.wikiConfig && formData.value.type !== 'faq') {
-        updateConfig.wiki_config = {
-          synthesis_model_id: formData.value.modelConfig?.wikiSynthesisModelId || '',
-          max_pages_per_ingest: formData.value.wikiConfig.maxPagesPerIngest || 0,
-          extraction_granularity: formData.value.wikiConfig.extractionGranularity || 'standard',
-          content_instructions: formData.value.wikiConfig.contentInstructions || '',
-          extraction_instructions: formData.value.wikiConfig.extractionInstructions || '',
-        }
-      }
+      // wiki_config 与 indexing_strategy 不再放进 updateConfig——
+      // 改为通过 updateKBConfig.wikiConfig 走 KBModelConfigRequest 里的
+      // WikiConfig 字段，这样后端才能真正持久化。
       if (formData.value.type !== 'faq') {
         updateConfig.indexing_strategy = {
           vector_enabled: formData.value.indexingStrategy?.vectorEnabled ?? true,
@@ -1331,13 +1366,17 @@ const doSubmit = async () => {
           graph_enabled: formData.value.indexingStrategy?.graphEnabled ?? false,
         }
       }
+      const scheduledRebuildConfig = formData.value.type !== 'faq'
+        ? (formData.value.scheduledRebuildConfig || null)
+        : null
       await updateKnowledgeBase(props.kbId, {
         name: data.name,
         description: data.description,
+                scheduled_rebuild_config: scheduledRebuildConfig,
         config: updateConfig
       })
 
-      // 2. 更新完整配置（模型、分块、多模态、存储引擎、知识图谱等）
+      // 2. 更新完整配置（模型、分块、多模态、存储引擎、知识图谱、Wiki 等）
       const config: KBModelConfigRequest = {
         llmModelId: data.summary_model_id,
         embeddingModelId: data.embedding_model_id,
@@ -1375,6 +1414,18 @@ const doSubmit = async () => {
           enabled: data.question_generation_config?.enabled || false,
           questionCount: data.question_generation_config?.question_count || 3,
           customInstructions: data.question_generation_config?.custom_instructions || ''
+        }
+      }
+
+      // Wiki 合成模型与调优参数（合成模型 ID / 单次最大页面数 / 抽取粒度 /
+      // 内容指令 / 抽取指令）。document 类型 KB 才发送，FAQ 类型不涉及。
+      if (formData.value.type !== 'faq') {
+        config.wikiConfig = {
+          synthesis_model_id: formData.value.modelConfig?.wikiSynthesisModelId || '',
+          max_pages_per_ingest: formData.value.wikiConfig?.maxPagesPerIngest ?? 0,
+          extraction_granularity: formData.value.wikiConfig?.extractionGranularity || 'standard',
+          content_instructions: formData.value.wikiConfig?.contentInstructions || '',
+          extraction_instructions: formData.value.wikiConfig?.extractionInstructions || '',
         }
       }
 

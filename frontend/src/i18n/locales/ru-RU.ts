@@ -530,6 +530,22 @@ export default {
     batchReparseSuccess: 'Отправлено задач пересборки: {count}',
     batchReparseFailed: 'Ошибка пакетной пересборки',
     batchReparseSkippedInFlight: 'Пропущено документов, которые ещё обрабатываются: {count}',
+    batchParse: 'Пакетная обработка',
+    batchParseTooltip: 'Запустит обработку {count} необработанных документов в выделении',
+    batchParseDisabledHint: 'Доступно только для необработанных или ожидающих документов',
+    batchParseNoEligible: 'В выделении нет документов, готовых к обработке',
+    batchParseSkippedNotEligible: 'Пропущено документов не в статусе "не обработано": {count}',
+    batchParseSuccess: 'Запущено задач обработки: {count}',
+    batchParseFailed: 'Ошибка пакетной обработки',
+    // Диалог выбора режима пакетной обработки (сопровождает кнопку «Пакетная обработка»)
+    batchParseModeTitle: 'Выберите режим пакетной обработки',
+    batchParseModeLabel: 'Режим обработки',
+    batchParseModeHint: 'Строго последовательно: один документ полностью обрабатывается, затем начинается следующий — рекомендуется при жёстких ограничениях RPM у upstream. Параллельно: использует параллельность по умолчанию (быстрее), но может создавать пики RPM.',
+    batchParseModeParallel: 'Параллельно (по умолчанию)',
+    batchParseModeSerial: 'Строго последовательно',
+    batchParseModeUseDefault: 'Использовать системное значение по умолчанию',
+    batchParseModeUseDefaultHint: 'Отправить с текущим значением системной настройки parser.batch_reparse_mode',
+    batchParseConfirm: 'Начать обработку',
     statusCompleted: 'Завершено',
     statusProcessing: 'Обработка',
     statusFinalizing: 'Оптимизация',
@@ -584,6 +600,7 @@ export default {
     parseStatusFailed: 'Ошибка',
     parseStatusCancelled: 'Отменено',
     parseStatusDraft: 'Черновик',
+    parseStatusUploaded: 'Не обработано',
     sourceFilter: 'Источник',
     allSources: 'Все источники',
     sourceWeb: 'Веб',
@@ -729,6 +746,9 @@ export default {
     manualSource: 'Документ для публикации',
     editUrl: 'Изменить URL',
     manualCharCount: '{count} символов',
+    autoParseLabel: 'Обработать сразу после загрузки',
+    autoParseOn: 'Сразу поставить в очередь обработки',
+    autoParseOff: 'Только сохранить — планировщик обработает последовательно',
   },
   knowledgeStages: {
     processConfig: {
@@ -2451,6 +2471,10 @@ export default {
         model: {
           max_concurrency: 'Лимит параллелизма модели по умолчанию',
         },
+        parser: {
+          pipeline_size: 'Размер конвейера парсера',
+          batch_reparse_mode: 'Режим пакетной обработки',
+        },
       },
       keyDescriptions: {
         auth: {
@@ -2486,6 +2510,17 @@ export default {
           max_concurrency:
             'Лимит по умолчанию на количество одновременных фоновых вызовов (индексация/обогащение) к одной модели, привязанный к ID модели и общий для всех реплик. Читается при каждом вызове и применяется сразу без перезапуска. 0 или отрицательное значение отключает лимит по умолчанию (каждая модель всё равно соблюдает собственный лимит, заданный в управлении моделями). Влияет только на фоновые задачи, не на интерактивный чат.',
         },
+        parser: {
+          pipeline_size:
+            'Лимит одновременно обрабатываемых документов для встроенного планировщика парсера, который подхватывает документы, загруженные с auto_parse=false. ' +
+            'Планировщик считает текущие in-flight задачи (processing + finalizing) и не запускает новые, когда лимит достигнут. ' +
+            'Читается на каждом опросе и применяется со следующего тика без перезапуска. 0 или отрицательное значение отключает планировщик ' +
+            '(существующие задачи asynq со статусом `pending` и ручные /reparse не затрагиваются). На лимитированных развёртываниях рекомендуется оставлять 1.',
+          batch_reparse_mode:
+            'Режим пакетной обработки. parallel = задачи отправляются в стандартную очередь core и обрабатываются параллельно (параллелизм = asynq.core_concurrency); ' +
+            'serial = задачи отправляются в выделенную очередь core_serial (параллелизм = 1), так что один документ полностью обрабатывается, прежде чем начнётся следующий. ' +
+            'Рекомендуется при жёстких ограничениях RPM у upstream. Временный выбор в диалоге пакетной обработки имеет приоритет над этой настройкой. Вступает в силу сразу, перезапуск не требуется.',
+        },
       },
       enumLabels: {
         auth: {
@@ -2496,6 +2531,12 @@ export default {
           default_tenant_mode: {
             create_personal: 'Создавать личное пространство',
             tenantless: 'Не создавать пространство',
+          },
+        },
+        parser: {
+          batch_reparse_mode: {
+            parallel: 'Параллельно (по умолчанию)',
+            serial: 'Строго последовательно',
           },
         },
       },
@@ -3224,6 +3265,7 @@ export default {
       processing: 'Индексация и разбор',
       data: 'Хранение и данные',
       integration: 'Публикация',
+      scheduledRebuild: 'Плановая перестройка',
     },
     sidebar: {
       basic: 'Основная информация',
@@ -3239,6 +3281,7 @@ export default {
       storage: 'Storage Engine',
       datasource: 'Источники данных',
       share: 'Sharing',
+      scheduledRebuild: 'Плановая перестройка',
       indexing: 'Стратегия индексации',
     },
     errors: {
@@ -4852,6 +4895,29 @@ export default {
       unavailableHint:
         'The bound vector store is currently unavailable; check its connection configuration in Settings → Vector Stores.',
       goGlobalSettings: 'Go to Vector Store Settings',
+    },
+    scheduledRebuild: {
+      title: 'Плановая перестройка',
+      description: 'Настройте периодическую перестройку отдельно для этой базы знаний.',
+      enabledLabel: 'Включить плановую перестройку',
+      enabledDesc: 'Периодически проверять и повторно отправлять подходящие документы.',
+      modeLabel: 'Режим расписания',
+      modeDesc: 'Выберите, как планировщик запускает перестройку.',
+      modeOptionSync: 'Синхронный',
+      modeOptionAsync: 'Асинхронный',
+      modeDescSync: 'Синхронный: следующий документ запускается только после того, как предыдущий достигнет терминального состояния.',
+      modeDescAsync: 'Асинхронный: запуск происходит по интервалу независимо от состояния предыдущего.',
+      intervalLabel: 'Интервал сканирования',
+      intervalDesc: 'Период сканирования этой базы знаний в секундах.',
+      batchLabel: 'Документов за запуск',
+      batchDesc: 'Максимальное число документов за одно сканирование. В синхронном режиме ограничено 1.',
+      statusesLabel: 'Статусы сканирования',
+      statusesDesc: 'Статусы разбора, подходящие для плановой перестройки.',
+      lastTriggeredTitle: 'Последний запущенный документ',
+      lastTriggeredName: 'Имя документа',
+      lastTriggeredAt: 'Время запуска',
+      lastTriggeredInFlightTip: 'Документ ещё обрабатывается; синхронный режим пропустит эту KB.',
+      lastTriggeredEmpty: 'Пока ни один документ не был запущен.',
     },
     storage: {
       title: 'Хранилище',

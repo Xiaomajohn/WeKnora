@@ -114,6 +114,18 @@
                       >{{ line.value }}</span>
                       <t-icon name="chevron-right" class="overview-chevron" />
                     </button>
+                    <!-- autoParse toggle row: toggling it does NOT navigate to
+                         a sub-section. The switch is the control; the right
+                         column shows the resulting "调度器" hint text. -->
+                    <div class="overview-row overview-row--static">
+                      <span class="overview-label">{{ t('uploadConfirm.autoParseLabel') }}</span>
+                      <span class="overview-value" :title="autoParseHint">
+                        {{ autoParseHint }}
+                      </span>
+                      <div class="overview-control">
+                        <t-switch v-model="uiState.autoParse" size="medium" />
+                      </div>
+                    </div>
                 </div>
 
                 <div v-else class="edit-section edit-section--embedded">
@@ -305,6 +317,12 @@ interface UploadUIState {
   }
   graphEnabled: boolean
   pdfForceScanned: boolean
+  // autoParse mirrors the server's auto_parse param. true (default) =
+  // upload and immediately enqueue parse. false = upload only; document
+  // stays in the "uploaded" state and only progresses via explicit
+  // /reparse or the per-KB scheduled_rebuild scheduler. No background
+  // process auto-promotes uploaded rows.
+  autoParse: boolean
 }
 
 const props = withDefaults(defineProps<{
@@ -538,6 +556,15 @@ const overviewLines = computed(() => {
   ]
 })
 
+// autoParseHint is the right-column text shown next to the autoParse
+// switch in the overview row. Reflects whether the next upload will be
+// queued immediately or held back for the parser scheduler.
+const autoParseHint = computed(() => {
+  return uiState.value.autoParse
+    ? t('uploadConfirm.autoParseOn')
+    : t('uploadConfirm.autoParseOff')
+})
+
 const sectionMeta: Record<string, { titleKey: string; descKey?: string }> = {
   parser: { titleKey: 'uploadConfirm.tabParser', descKey: 'kbSettings.parser.description' },
   chunking: { titleKey: 'uploadConfirm.tabChunking', descKey: 'knowledgeEditor.chunking.description' },
@@ -653,6 +680,7 @@ function createDefaultUIState(): UploadUIState {
     },
     graphEnabled: false,
     pdfForceScanned: false,
+    autoParse: true,
   }
 }
 
@@ -705,6 +733,9 @@ function initFromKbInfo(kb: any) {
     },
     graphEnabled: kb.indexing_strategy?.graph_enabled ?? false,
     pdfForceScanned: false,
+    // autoParse is intentionally NOT seeded from kbInfo: the choice is
+    // per-upload (and per-session, since the dialog resets on close).
+    autoParse: true,
   }
 }
 
@@ -952,16 +983,18 @@ const handleConfirm = () => {
   if (!validateBeforeConfirm()) return
 
   const processConfig = buildProcessOverrides()
+  const autoParse = uiState.value.autoParse
   if (props.mode === 'manual' && props.manualPreview) {
-    emit('confirm', { processConfig, mode: 'manual', manual: { ...props.manualPreview } })
+    emit('confirm', { processConfig, mode: 'manual', manual: { ...props.manualPreview }, autoParse })
   } else if (props.mode === 'reparse' && props.reparsePreview) {
-    emit('confirm', { processConfig, mode: 'reparse', reparse: { ...props.reparsePreview } })
+    emit('confirm', { processConfig, mode: 'reparse', reparse: { ...props.reparsePreview }, autoParse })
   } else {
     emit('confirm', {
       processConfig,
       mode: 'file',
       files: [...localFiles.value],
       urls: [...localUrls.value],
+      autoParse,
     })
   }
   emit('update:visible', false)
@@ -1239,6 +1272,23 @@ const handleConfirm = () => {
 
     &:hover {
       background: var(--td-error-color-2);
+    }
+  }
+
+  // --static rows are not clickable and host an inline control (e.g. the
+  // autoParse switch). They look like normal rows but suppress the hover
+  // background and pointer cursor.
+  &--static {
+    cursor: default;
+
+    &:hover {
+      background: var(--td-bg-color-container);
+    }
+
+    .overview-control {
+      grid-column: 3;
+      display: flex;
+      justify-content: flex-end;
     }
   }
 }

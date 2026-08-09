@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="960" viewBox="0 0 1600 960">
+  <rect width="1600" height="960" fill="#f5f7fa"/>
+  <rect x="0" y="0" width="220" height="960" fill="#ffffff"/>
+  <text x="38" y="55" font-family="sans-serif" font-size="24" font-weight="700" fill="#1d2129">WeKnora</text>
+  <rect x="18" y="98" width="184" height="44" rx="6" fill="#e8f3ff"/>
+  <text x="48" y="126" font-family="sans-serif" font-size="15" fill="#1677ff">知识库</text>
+  <text x="48" y="180" font-family="sans-serif" font-size="15" fill="#4e5969">智能体</text>
+  <text x="48" y="226" font-family="sans-serif" font-size="15" fill="#4e5969">系统设置</text>
+
+  <rect x="220" y="0" width="1380" height="72" fill="#ffffff"/>
+  <text x="258" y="44" font-family="sans-serif" font-size="20" font-weight="600" fill="#1d2129">知识库 / 政策文档库</text>
+  <circle cx="1540" cy="36" r="18" fill="#dbeafe"/>
+
+  <rect x="250" y="96" width="1320" height="812" rx="10" fill="#ffffff"/>
+  <text x="282" y="140" font-family="sans-serif" font-size="22" font-weight="600" fill="#1d2129">政策文档库</text>
+  <text x="282" y="186" font-family="sans-serif" font-size="15" font-weight="600" fill="#1677ff">文档</text>
+  <text x="350" y="186" font-family="sans-serif" font-size="15" fill="#86909c">Wiki</text>
+  <text x="410" y="186" font-family="sans-serif" font-size="15" fill="#86909c">知识图谱</text>
+  <rect x="280" y="198" width="38" height="3" fill="#1677ff"/>
+
+  <rect x="280" y="224" width="1260" height="48" fill="#f7f8fa"/>
+  <text x="306" y="254" font-family="sans-serif" font-size="14" fill="#4e5969">✓</text>
+  <text x="350" y="254" font-family="sans-serif" font-size="14" fill="#4e5969">文档名称</text>
+  <text x="830" y="254" font-family="sans-serif" font-size="14" fill="#4e5969">类型</text>
+  <text x="960" y="254" font-family="sans-serif" font-size="14" fill="#4e5969">解析状态</text>
+  <text x="1170" y="254" font-family="sans-serif" font-size="14" fill="#4e5969">更新时间</text>
+  <text x="1430" y="254" font-family="sans-serif" font-size="14" fill="#4e5969">操作</text>
+
+  <g font-family="sans-serif" font-size="14" fill="#1d2129">
+    <text x="306" y="312" fill="#1677ff">✓</text><text x="350" y="312">合同管理办法.pdf</text><text x="830" y="312">PDF</text>
+    <rect x="950" y="290" width="120" height="30" rx="15" fill="#e8f3ff"/><text x="973" y="310" fill="#1677ff">解析中 42%</text>
+    <text x="1170" y="312" fill="#86909c">刚刚</text><text x="1430" y="312" fill="#1677ff">查看</text>
+    <line x1="280" y1="338" x2="1540" y2="338" stroke="#e5e6eb"/>
+    <text x="306" y="380" fill="#1677ff">✓</text><text x="350" y="380">采购制度.docx</text><text x="830" y="380">DOCX</text>
+    <rect x="950" y="358" width="92" height="30" rx="15" fill="#f2f3f5"/><text x="970" y="378" fill="#86909c">未解析</text>
+    <text x="1170" y="380" fill="#86909c">昨天</text><text x="1430" y="380" fill="#1677ff">查看</text>
+    <line x1="280" y1="406" x2="1540" y2="406" stroke="#e5e6eb"/>
+    <text x="306" y="448" fill="#1677ff">✓</text><text x="350" y="448">差旅规范.pdf</text><text x="830" y="448">PDF</text>
+    <rect x="950" y="426" width="92" height="30" rx="15" fill="#f2f3f5"/><text x="970" y="446" fill="#86909c">未解析</text>
+    <text x="1170" y="448" fill="#86909c">2 天前</text><text x="1430" y="448" fill="#1677ff">查看</text>
+    <line x1="280" y1="474" x2="1540" y2="474" stroke="#e5e6eb"/>
+    <text x="306" y="516" fill="#1677ff">✓</text><text x="350" y="516">历史制度.pdf</text><text x="830" y="516">PDF</text>
+    <rect x="950" y="494" width="92" height="30" rx="15" fill="#e8ffea"/><text x="970" y="514" fill="#00a870">已解析</text>
+    <text x="1170" y="516" fill="#86909c">7 天前</text><text x="1430" y="516" fill="#1677ff">查看</text>
+  </g>
+
+  <rect x="450" y="812" width="900" height="66" rx="10" fill="#ffffff" stroke="#d9e2f2" filter="url(#shadow)"/>
+  <text x="480" y="852" font-family="sans-serif" font-size="15" fill="#1d2129">已选择 4 项</text>
+  <rect x="1010" y="828" width="76" height="36" rx="5" fill="#ffffff" stroke="#c9cdd4"/><text x="1034" y="851" font-family="sans-serif" font-size="14" fill="#4e5969">删除</text>
+  <rect x="1098" y="828" width="98" height="36" rx="5" fill="#ffffff" stroke="#c9cdd4"/><text x="1118" y="851" font-family="sans-serif" font-size="14" fill="#4e5969">重新解析</text>
+  <rect x="1208" y="828" width="110" height="36" rx="5" fill="#1677ff"/><text x="1232" y="851" font-family="sans-serif" font-size="14" fill="#ffffff">批量解析</text>
+
+  <rect x="0" y="0" width="1600" height="960" fill="#000000" opacity="0.28"/>
+  <rect x="480" y="145" width="640" height="650" rx="12" fill="#ffffff" filter="url(#shadow)"/>
+  <text x="520" y="194" font-family="sans-serif" font-size="20" font-weight="600" fill="#1d2129">选择批量解析模式</text>
+  <text x="520" y="232" font-family="sans-serif" font-size="14" fill="#4e5969">严格串行模式下，上一个文档全部解析完成后，才会开始下一个文档；</text>
+  <text x="520" y="256" font-family="sans-serif" font-size="14" fill="#4e5969">未轮到的文档保持原状态。</text>
+  <rect x="520" y="278" width="560" height="52" rx="6" fill="#f7f8fa"/>
+  <text x="540" y="309" font-family="sans-serif" font-size="14" fill="#1d2129">本次可解析 3 个文档，跳过 1 个已解析文档</text>
+
+  <rect x="520" y="350" width="560" height="78" rx="7" fill="#ffffff" stroke="#c9cdd4"/>
+  <circle cx="548" cy="378" r="9" fill="#ffffff" stroke="#86909c"/>
+  <text x="570" y="382" font-family="sans-serif" font-size="15" font-weight="600" fill="#1d2129">使用系统默认</text>
+  <text x="570" y="408" font-family="sans-serif" font-size="13" fill="#86909c">遵循系统设置中的批量解析模式</text>
+
+  <rect x="520" y="442" width="560" height="78" rx="7" fill="#ffffff" stroke="#c9cdd4"/>
+  <circle cx="548" cy="470" r="9" fill="#ffffff" stroke="#86909c"/>
+  <text x="570" y="474" font-family="sans-serif" font-size="15" font-weight="600" fill="#1d2129">并行解析</text>
+  <text x="570" y="500" font-family="sans-serif" font-size="13" fill="#86909c">多个文档同时开始，处理速度更快</text>
+
+  <rect x="520" y="534" width="560" height="92" rx="7" fill="#f0f7ff" stroke="#1677ff" stroke-width="2"/>
+  <circle cx="548" cy="566" r="10" fill="#1677ff"/><circle cx="548" cy="566" r="4" fill="#ffffff"/>
+  <text x="570" y="570" font-family="sans-serif" font-size="15" font-weight="600" fill="#1677ff">严格串行（推荐）</text>
+  <text x="570" y="598" font-family="sans-serif" font-size="13" fill="#4e5969">完成一个再开始下一个，等待文档保持未解析或原状态</text>
+
+  <rect x="520" y="650" width="560" height="58" rx="6" fill="#f7f8fa"/>
+  <text x="542" y="684" font-family="sans-serif" font-size="13" fill="#4e5969">文档 A 解析中  →  A 完成  →  文档 B 开始  →  B 完成  →  文档 C 开始</text>
+  <rect x="888" y="735" width="76" height="38" rx="5" fill="#ffffff" stroke="#c9cdd4"/>
+  <text x="912" y="759" font-family="sans-serif" font-size="14" fill="#4e5969">取消</text>
+  <rect x="976" y="735" width="104" height="38" rx="5" fill="#1677ff"/>
+  <text x="1000" y="759" font-family="sans-serif" font-size="14" fill="#ffffff">开始解析</text>
+
+  <defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="8" stdDeviation="14" flood-opacity="0.18"/></filter></defs>
+</svg>

@@ -105,9 +105,14 @@ type KnowledgeProcessOverrides struct {
 //   - customFileName: Optional custom file name (useful for folder uploads with path)
 //   - channel: Optional ingestion channel (e.g. "web", "api", "wechat"); empty defaults to "web"
 //   - processConfig: Optional parse config overrides (serialized as process_config form field)
+//   - autoParse: Optional. Pointer to bool. nil → server default (true, parse on upload).
+//     Set to a pointer to false to upload the file but defer parsing to the
+//     in-process parser scheduler / manual reparse (useful when respecting
+//     strict upstream embedding RPM limits).
 func (c *Client) CreateKnowledgeFromFile(ctx context.Context,
 	knowledgeBaseID string, filePath string, metadata map[string]string, enableMultimodel *bool, customFileName string, channel string,
 	processConfig *KnowledgeProcessOverrides,
+	autoParse *bool,
 ) (*Knowledge, error) {
 	// Open the local file
 	file, err := os.Open(filePath)
@@ -184,6 +189,14 @@ func (c *Client) CreateKnowledgeFromFile(ctx context.Context,
 		}
 	}
 
+	// Add auto_parse field when caller opts in. nil = legacy default (true)
+	// on the server, so we omit the field rather than emitting empty.
+	if autoParse != nil {
+		if err := writer.WriteField("auto_parse", strconv.FormatBool(*autoParse)); err != nil {
+			return nil, fmt.Errorf("failed to write auto_parse field: %w", err)
+		}
+	}
+
 	// Close the multipart writer
 	err = writer.Close()
 	if err != nil {
@@ -236,6 +249,10 @@ type CreateKnowledgeFromURLRequest struct {
 	Channel string `json:"channel,omitempty"`
 	// ProcessConfig is optional per-upload parse config overrides (KnowledgeProcessOverrides).
 	ProcessConfig *KnowledgeProcessOverrides `json:"process_config,omitempty"`
+	// AutoParse defaults to true (legacy behavior) when omitted. Set to a
+	// pointer to false to store the URL but defer parsing to the in-process
+	// parser scheduler or manual /reparse.
+	AutoParse *bool `json:"auto_parse,omitempty"`
 }
 
 // CreateKnowledgeFromURL creates a knowledge entry from a URL.

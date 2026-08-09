@@ -37,6 +37,17 @@ const (
 const (
 	// ParseStatusPending indicates the knowledge is waiting to be processed
 	ParseStatusPending = "pending"
+	// ParseStatusUploaded indicates the knowledge file is stored but has NOT
+	// been enqueued for parsing. Distinct from ParseStatusPending ("queued
+	// for parse"): an "uploaded" row stays dormant until the user manually
+	// triggers a /reparse call (single or /batch-reparse) or the per-KB
+	// scheduled_rebuild scheduler picks it up. Created via
+	// CreateKnowledgeFromFile/URL/Manual with auto_parse=false.
+	//
+	// Note: there is no longer any background process that auto-promotes
+	// uploaded rows. Users with strict upstream embedding RPM limits must
+	// trigger /reparse manually now.
+	ParseStatusUploaded = "uploaded"
 	// ParseStatusProcessing indicates the knowledge is being processed
 	// (DocReader / chunking / embedding stage).
 	ParseStatusProcessing = "processing"
@@ -62,6 +73,12 @@ const (
 	// queued downstream tasks, but the knowledge row and any already-written
 	// chunks/index are kept so the user can re-trigger parsing via reparse.
 	ParseStatusCancelled = "cancelled"
+	// ParseStatusUnprocessed is the database column default value for
+	// parse_status when no Go code path has set it explicitly. Lets
+	// scheduled rebuild (and any future status filter) address rows that
+	// have NEVER been enqueued for parsing, e.g. documents inserted by
+	// external scripts that bypassed CreateKnowledgeFromFile/URL/Manual.
+	ParseStatusUnprocessed = "unprocessed"
 )
 
 // Summary status constants for async summary generation
@@ -211,6 +228,10 @@ type ManualKnowledgePayload struct {
 	TagIDs        []string                   `json:"tag_ids"`
 	Channel       string                     `json:"channel"`
 	ProcessConfig *KnowledgeProcessOverrides `json:"process_config,omitempty"`
+	// AutoParse mirrors the create-file/url auto_parse param. nil / unset
+	// → backend default (true = parse immediately). Set to a pointer to
+	// `false` to save the manual draft but skip enqueueing a parse task.
+	AutoParse *bool `json:"auto_parse,omitempty"`
 }
 
 // KnowledgeSearchScope defines a (tenant_id, knowledge_base_id) scope for knowledge search (e.g. own KBs + shared KBs).

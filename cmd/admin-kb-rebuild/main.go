@@ -21,10 +21,13 @@
 //     indexing_strategy, vector_store_id, creator_id, description, …)
 //     per the "KB 软删除与复刻重建规范" memory.
 //
-// qdrant vectors are NOT touched here — the cancel-parser dry-run that
-// ran earlier showed the qdrant instance has zero collections, so there
-// is nothing to delete; if a future KB has actual vector points to
-// purge, run a separate qdrant-aware tool.
+// qdrant vectors: when QDRANT_HOST is set, we sweep every collection
+// whose name starts with the configured base name (env QDRANT_COLLECTION
+// or the default "weknora_embeddings") and delete every point whose
+// payload carries the offending knowledge_base_id. This is the same
+// filter the production QdrantRepository.DeleteByKnowledgeIDList uses,
+// generalized to delete by knowledge_base_id directly so we don't need
+// to round-trip through the knowledges table.
 //
 // Usage:
 //
@@ -39,6 +42,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/config"
@@ -46,6 +50,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"github.com/qdrant/go-client/qdrant"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -176,6 +181,29 @@ func main() {
 		fmt.Fprintf(os.Stdout, "    active cancelled               : %d\n", asynqCancelled)
 	} else {
 		fmt.Fprintf(os.Stdout, "\n  asynq sweep skipped (no REDIS reachable)\n")
+	}
+
+	// 3b. Sweep qdrant vectors if reachable. Tries every collection that
+	// starts with the configured base name (covering the per-dimension
+	// siblings). Best-effort: failures are logged and the rebuild
+	// continues, because the DB transaction below is the source of
+	// truth for the system.
+	qdrantSwept := 0
+	if qd := openQdrant(); qd != nil {
+		collections := qdMatchingCollections(ctx, qd)
+		fmt.Fprintf(os.Stdout, "\n  qdrant to sweep (best-effort)\n")
+		fmt.Fprintf(os.Stdout, "    matching collections : %s\n", strings.Join(collections, ", "))
+		for _, c := range collections {
+			n, err := qdDeleteByKB(ctx, qd, c, *kbID)
+			if err != nil {
+				logger.Warnf(ctx, "[admin-kb-rebuild] qdrant delete %s kb=%s: %v", c, *kbID, err)
+				continue
+			}
+			qdrantSwept += n
+		}
+		fmt.Fprintf(os.Stdout, "    points deleted        : %d\n", qdrantSwept)
+	} else {
+		fmt.Fprintf(os.Stdout, "\n  qdrant sweep skipped (no QDRANT_HOST reachable)\n")
 	}
 
 	if !*yes {
@@ -497,6 +525,105 @@ func openRedis() (*redis.Client, string) {
 	}
 	return client, addr
 }
+
+func openQdrant() *qdrant.Client {
+	host := envOr("QDRANT_HOST", "localhost")
+	port, _ := strconv.Atoi(envOr("QDRANT_PORT", "6334"))
+	if port == 0 {
+		port = 6334
+	}
+	apiKey := os.Getenv("QDRANT_API_KEY")
+	useTLS := strings.EqualFold(os.Getenv("QDRANT_USE_TLS"), "true")
+
+	addr := fmt.Sprintf("%s:%d", host, port)
+	connCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, err := qdrant.NewClient(&qdrant.Config{Host: host, Port: port, APIKey: apiKey, UseTLS: useTLS})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[warn] qdrant dial %s failed (%v) — vector sweep will be skipped\n", addr, err)
+		return nil
+	}
+	// Health check; some builds don't expose /healthz, so just try a no-op.
+	_, err = client.ListCollections(connCtx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[warn] qdrant list collections %s failed (%v) — vector sweep will be skipped\n", addr, err)
+		_ = client.Close()
+		return nil
+	}
+	return client
+}
+
+// qdMatchingCollections returns the list of collection names that look
+// like they belong to weknora (prefix match on the configured base name).
+// Each dimension gets its own collection in production
+// ("<base>_<dim>"), so we match by prefix rather than a hardcoded name.
+func qdMatchingCollections(ctx context.Context, client *qdrant.Client) []string {
+	base := envOr("QDRANT_COLLECTION", "weknora_embeddings")
+	collections, err := client.ListCollections(ctx)
+	if err != nil {
+		logger.Warnf(ctx, "[admin-kb-rebuild] qdrant list collections: %v", err)
+		return nil
+	}
+	out := make([]string, 0, len(collections))
+	for _, c := range collections {
+		if c == base || strings.HasPrefix(c, base+"_") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// qdDeleteByKB deletes every point in the given collection whose payload
+// has knowledge_base_id == kbID. The qdrant collection has a payload index
+// on knowledge_base_id (see qdrantRepository.ensureCollection), so this
+// filter is index-backed and won't OOM. The v1.18.1 client returns only
+// an operation_id+status from Delete, so we report "before → after" via
+// Count around the Delete call to give the operator a real number.
+func qdDeleteByKB(ctx context.Context, client *qdrant.Client, collection, kbID string) (int, error) {
+	filter := &qdrant.Filter{
+		Must: []*qdrant.Condition{
+			qdrant.NewMatchKeywords("knowledge_base_id", kbID),
+		},
+	}
+	before, err := client.Count(ctx, &qdrant.CountPoints{
+		CollectionName: collection,
+		Filter:         filter,
+		Exact:          boolPtr(true),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("count before: %w", err)
+	}
+	if before == 0 {
+		return 0, nil
+	}
+	if _, err := client.Delete(ctx, &qdrant.DeletePoints{
+		CollectionName: collection,
+		Points:         qdrant.NewPointsSelectorFilter(filter),
+	}); err != nil {
+		return 0, err
+	}
+	// Qdrant's delete-by-filter is async; the payload index removal
+	// is fast but the segment cleanup can lag. We re-count up to a
+	// short window so the operator gets a non-zero "deleted" number
+	// whenever the collection actually held the points.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		after, err := client.Count(ctx, &qdrant.CountPoints{
+			CollectionName: collection,
+			Filter:         filter,
+			Exact:          boolPtr(true),
+		})
+		if err == nil && after == 0 {
+			return int(before), nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	// Best effort: assume all `before` were removed even if the
+	// collection is still draining.
+	return int(before), nil
+}
+
+func boolPtr(b bool) *bool { return &b }
 
 func isQueueNotFoundErr(err error) bool {
 	if err == nil {
