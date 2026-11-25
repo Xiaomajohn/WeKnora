@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WeKnora 引用功能验证 — 最终演示</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+        max-width: 900px; margin: 30px auto; padding: 0 20px; color: #1f2329; background: #f7f8fa; }
+.card { background: white; border-radius: 8px; padding: 20px 24px; margin: 16px 0;
+         box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+.kb-cite { display: inline-block; background: #e3f2fd; color: #1976d2; padding: 2px 8px;
+            margin: 0 2px; border-radius: 4px; font-size: 13px; cursor: pointer;
+            border: 1px solid #bbdefb; }
+.kb-cite:hover { background: #bbdefb; }
+.cite-doc { font-weight: 600; color: #1976d2; }
+.marker { background: #fff3cd; padding: 1px 6px; border-radius: 3px; font-family: monospace;
+         font-size: 13px; }
+.section-title { color: #1f2329; border-left: 4px solid #1976d2; padding-left: 12px;
+                 font-size: 18px; margin: 24px 0 12px; }
+.status-ok { background: #d4edda; color: #155724; padding: 4px 10px; border-radius: 4px;
+             display: inline-block; font-size: 13px; }
+.status-bad { background: #f8d7da; color: #721c24; padding: 4px 10px; border-radius: 4px;
+             display: inline-block; font-size: 13px; }
+pre { background: #f5f5f5; padding: 12px; border-radius: 6px; overflow-x: auto;
+      font-size: 12px; line-height: 1.5; }
+.kb-card { border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px 16px; margin: 8px 0;
+          background: #fafbfc; }
+.kb-card .title { color: #1976d2; font-weight: 600; }
+.kb-card .file { font-family: monospace; font-size: 12px; color: #6a737d; }
+.kb-card .chunk { font-family: monospace; font-size: 11px; color: #999; }
+</style>
+</head>
+<body>
+
+<h1>📚 WeKnora 文档引用功能验证</h1>
+
+<div class="card">
+<h3>1. 诊断结果</h3>
+<table style="width:100%; border-collapse: collapse;">
+<tr><td style="padding:6px"><b>Prompt 是否落库</b></td><td><span class="status-ok">✅ 是 (819 chars)</span></td></tr>
+<tr><td style="padding:6px"><b>Prompt 是否被加载</b></td><td><span class="status-ok">✅ 是（docker logs 确认）</span></td></tr>
+<tr><td style="padding:6px"><b>知识库检索结果</b></td><td><span class="status-ok">✅ 22 条 hits</span></td></tr>
+<tr><td style="padding:6px"><b>LLM 回答质量</b></td><td><span class="status-ok">✅ 包含完整内容（基于 KB）</span></td></tr>
+<tr><td style="padding:6px"><b>references 事件</b></td><td><span class="status-ok">✅ 22 条</span></td></tr>
+<tr><td style="padding:6px"><b>DB messages.knowledge_references</b></td><td><span class="status-ok">✅ 已持久化</span></td></tr>
+<tr><td style="padding:6px"><b>LLM 输出 <kb/> 内联标签</b></td><td><span class="status-bad">❌ 未输出（模型拒绝输出 XML 风格）</span></td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3>2. 真实回答内容（来自 LLM）</h3>
+<p><b>问题</b>：法制行业测试部包含哪些主要项目</p>
+<div style="background:#f9f9f9; padding:16px; border-radius:6px; white-space:pre-wrap; line-height:1.7;">根据当前检索到的知识库内容，法制行业测试部主要涉及以下几个项目：
+
+1.  **办案区平台**：包括入出区管理、候问管理、审讯管理、电子地图、智能分析报警、台账管理等功能模块。
+2.  **物管平台**：涉及涉案物品的登记、入库、出库、借出、归还、移送、示证、盘点、报警管理及报表统计等全流程管理。
+3.  **监督平台**：包含执法监督大屏、数据研判、行政处罚信息公开、物管模块统计数据展示等。
+4.  **案管模块**：涉及案卷管理（如ZX案管柜）、案卷查询、流转信息等。
+5.  **新警综平台**：包含场所注册、消息提示、报备管理、系统角色（如新增辅警角色）等功能。</div>
+<p style="color:#999; font-size:13px;">↑ LLM 用了 markdown 引用 <span class="marker">《文档名.docx》</span>，但没用 <span class="marker">&lt;kb doc="..." chunk_id="..." /&gt;</span></p>
+</div>
+
+<div class="card">
+<h3>3. 后端已经发出的 references 结构 (22 条) — 前端会渲染成"参考资料"侧栏</h3>
+<p>下面是 WeKnora 实际发送给前端的引用数据。前端 ChatReferencesDrawer 会用这个列表显示「📄 文档卡片」+「跳转到文档」按钮。</p>
+
+<div class="kb-card">
+  <div class="title">📄 经验文档/2023-8/白金彤办案区入出区+候问管理+柜子+升级问题排查/白金彤办案区入出区+候问管理+柜子+升级问题排查.docx</div>
+  <div class="file">经验文档/2023-8/白金彤办案区入出区+候问管理+柜子+升级问题排查/白金彤办案区入出区+候问管理+柜子+升级问题排查.docx</div>
+  <div class="chunk">chunk_id=5c99d9a2-5ba5-4f65-8... | score=0.009 | chunk_index=4</div>
+</div>
+<div class="kb-card">
+  <div class="title">📄 经验文档/2022-10/物管使用办案区涉案物品测试(2)/物管使用办案区涉案物品测试(2).docx</div>
+  <div class="file">经验文档/2022-10/物管使用办案区涉案物品测试(2)/物管使用办案区涉案物品测试(2).docx</div>
+  <div class="chunk">chunk_id=550b6b07-be0a-44ae-8... | score=0.011 | chunk_index=7</div>
+</div>
+<div class="kb-card">
+  <div class="title">📄 经验文档/2022-10/物管使用办案区涉案物品测试(2)/物管使用办案区涉案物品测试(2).docx</div>
+  <div class="file">经验文档/2022-10/物管使用办案区涉案物品测试(2)/物管使用办案区涉案物品测试(2).docx</div>
+  <div class="chunk">chunk_id=58763b8d-cd9c-45a3-a... | score=0.009 | chunk_index=14</div>
+</div>
+<div class="kb-card">
+  <div class="title">📄 经验文档/2022-7/金伟峰-物管平台的业务流程及注意事项/金伟峰-物管平台的业务流程及注意事项.docx</div>
+  <div class="file">经验文档/2022-7/金伟峰-物管平台的业务流程及注意事项/金伟峰-物管平台的业务流程及注意事项.docx</div>
+  <div class="chunk">chunk_id=7eb2df1e-2081-45cf-8... | score=0.011 | chunk_index=3</div>
+</div>
+<div class="kb-card">
+  <div class="title">📄 经验文档/2024-3/金有月-非法出库报警配置/金有月-非法出库报警配置.docx</div>
+  <div class="file">经验文档/2024-3/金有月-非法出库报警配置/金有月-非法出库报警配置.docx</div>
+  <div class="chunk">chunk_id=650d7d72-dd26-4be5-8... | score=0.011 | chunk_index=1</div>
+</div>
+<div class="kb-card">
+  <div class="title">📄 经验文档/2023-5/韩悦-行业对照表的一些小问题/韩悦-行业对照表的一些小问题.docx</div>
+  <div class="file">经验文档/2023-5/韩悦-行业对照表的一些小问题/韩悦-行业对照表的一些小问题.docx</div>
+  <div class="chunk">chunk_id=4abe27e0-1389-4a78-a... | score=0.010 | chunk_index=3</div>
+</div>
+<div class="kb-card">
+  <div class="title">📄 现场出差总结/无锡滨湖分局现场验收测试/无锡滨湖分局现场验收测试20220919-陈岗-出差总结.xlsx</div>
+  <div class="file">现场出差总结/无锡滨湖分局现场验收测试/无锡滨湖分局现场验收测试20220919-陈岗-出差总结.xlsx</div>
+  <div class="chunk">chunk_id=9c82ce88-ff9f-4434-9... | score=0.012 | chunk_index=16</div>
+</div>
+<div class="kb-card">
+  <div class="title">📄 每日知识点汇总/2021-9-每日知识点/2021-9-每日知识点.docx</div>
+  <div class="file">每日知识点汇总/2021-9-每日知识点/2021-9-每日知识点.docx</div>
+  <div class="chunk">chunk_id=0f4140c8-9fa8-4683-b... | score=0.010 | chunk_index=3</div>
+</div><p>... +14 more references</p>
+</div>
+
+<div class="card">
+<h3>4. 如果浏览器打开这个会话，应该看到</h3>
+<p>前端 [botmsg.vue](file:///home/WeKnora/weknora/frontend/src/views/chat/components/botmsg.vue#L23) 的逻辑：</p>
+<pre>&lt;docInfo v-if="session.knowledge_references?.length" :session="session"&gt;&lt;/docInfo&gt;</pre>
+<p>由于 <code>knowledge_references.length = 22 > 0</code>，<strong>docInfo 组件一定会被渲染</strong>——也就是会显示文档名、文件名、跳转按钮等元信息。</p>
+<p><b>但是</b>：因为 LLM 没有在回答文本里输出 <code>&lt;kb doc="..." chunk_id="..." /&gt;</code> 标签，所以回答中<b>不会出现可点击的内联书本图标</b>（前端 [citationMarkdown.ts](file:///home/WeKnora/weknora/frontend/src/utils/citationMarkdown.ts) 不识别 <code>《XXX.docx》</code> 风格的引用）。</p>
+</div>
+
+<div class="card">
+<h3>5. 解决方案（任选一个）</h3>
+<ol>
+<li><b>前端改进</b>：让 [citationMarkdown.ts](file:///home/WeKnora/weknora/frontend/src/utils/citationMarkdown.ts) 增加 markdown→kb 自动转换（识别 <code>《XXX.docx》</code> 模式，与 knowledge_references 中的 filename 匹配，自动插入 <code>&lt;kb/&gt;</code>）</li>
+<li><b>后端正则替换</b>：在 chat_pipeline 中扫描 LLM 输出的 <code>《XXX.docx》</code> 模式，与 references 对比，替换为 <code>&lt;kb doc="..." chunk_id="..."/&gt;</code></li>
+<li><b>换一个更听话的模型</b>：当前 MiniMax-M3、GLM-4.7-Flash、deepseek-v4-flash 都不输出 <code>&lt;kb/&gt;</code>；试 DeepSeek-R1-0528-Qwen3-8B</li>
+<li><b>Prompt 继续优化</b>：可能需要更短、更明确的指令——但前 4 版都没生效</li>
+</ol>
+</div>
+
+</body>
+</html>
