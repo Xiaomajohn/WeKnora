@@ -116,6 +116,39 @@ func (s *customAgentService) CreateAgent(ctx context.Context, agent *types.Custo
 	return agent, nil
 }
 
+// localizeBuiltinAgentPrompt fills an empty system_prompt on a builtin-agent
+// row by syncing from the latest YAML template. The migration 000071 clears
+// these fields so older DB rows (whose prompts came from 000006's copy of
+// tenant-level English defaults) can be transparently refreshed with the
+// localized Chinese templates now shipping in builtin_agents.yaml /
+// prompt_templates/. User-customized prompts (non-empty) are never touched.
+//
+// When a refresh happens, the row is persisted via s.repo.UpdateAgent so the
+// next read can skip the YAML resolution step entirely. Failures are logged
+// but not fatal — list semantics stay correct because we still merge the
+// in-memory YAML prompt into the returned agent.
+func (s *customAgentService) localizeBuiltinAgentPrompt(ctx context.Context, agent *types.CustomAgent, defaultAgent *types.CustomAgent) {
+	if agent == nil || defaultAgent == nil {
+		return
+	}
+	if !agent.IsBuiltin {
+		return
+	}
+	if defaultAgent.Config.SystemPrompt == "" {
+		return
+	}
+	// Only refresh when the stored prompt is empty — a non-empty value means
+	// the user (or a prior 000006 migration) put something there we should not
+	// silently overwrite.
+	if agent.Config.SystemPrompt == "" {
+		agent.Config.SystemPrompt = defaultAgent.Config.SystemPrompt
+		agent.Config.SystemPromptID = defaultAgent.Config.SystemPromptID
+		if err := s.repo.UpdateAgent(ctx, agent); err != nil {
+			logger.Warnf(ctx, "Failed to persist localized builtin agent prompt for %s: %v", agent.ID, err)
+		}
+	}
+}
+
 // GetAgentByID retrieves an agent by its ID (including built-in agents)
 func (s *customAgentService) GetAgentByID(ctx context.Context, id string) (*types.CustomAgent, error) {
 	if id == "" {
@@ -136,6 +169,14 @@ func (s *customAgentService) GetAgentByID(ctx context.Context, id string) (*type
 		if err == nil {
 			// Found in database, return with customized config
 			agent.EnsureDefaults()
+			// If a builtin row exists but its system_prompt is empty (e.g.
+			// left blank by migration 000071), fill it from the latest YAML
+			// template so users see the localized prompt immediately.
+			if agent.Config.SystemPrompt == "" {
+				if def := types.GetBuiltinAgentWithContext(ctx, id, tenantID); def != nil {
+					s.localizeBuiltinAgentPrompt(ctx, agent, def)
+				}
+			}
 			return agent, nil
 		}
 		// Not in database, return default built-in agent from registry (i18n-aware)
@@ -212,6 +253,13 @@ func (s *customAgentService) ListAgents(ctx context.Context) ([]*types.CustomAge
 			// Use customized config from database
 			for _, agent := range allAgents {
 				if agent.ID == builtinID {
+					// Sync from YAML when the stored builtin prompt is empty
+					// (see localizeBuiltinAgentPrompt for the rationale).
+					if agent.Config.SystemPrompt == "" {
+						if def := types.GetBuiltinAgentWithContext(ctx, builtinID, tenantID); def != nil {
+							s.localizeBuiltinAgentPrompt(ctx, agent, def)
+						}
+					}
 					result = append(result, agent)
 					break
 				}
