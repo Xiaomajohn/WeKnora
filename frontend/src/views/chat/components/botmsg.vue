@@ -20,11 +20,16 @@
                     :user-query="userQuery" :rag-mode="true" :follow-up-loading="followUpLoading" />
             </div>
             <template v-else>
-                <docInfo v-if="session.knowledge_references?.length" :session="session"></docInfo>
                 <AgentStreamDisplay :session="session" :session-id="sessionId" :user-query="userQuery"
                     v-if="session.isAgentMode" :follow-up-loading="followUpLoading" />
             </template>
             <deepThink :deepSession="session" v-if="session.showThink && !session.isAgentMode"></deepThink>
+            <!-- 引入文档链接：统一在回答末尾显示，点击展开查看原文片段 -->
+            <DocReferencesFooter
+                v-if="!session.isAgentMode && session.knowledge_references?.length"
+                :session="session"
+                title="引入文档"
+            />
         </div>
         <!-- 非 Agent 模式下才显示传统的 markdown 渲染 -->
         <div ref="parentMd" v-if="!session.hideContent && !session.isAgentMode">
@@ -81,6 +86,7 @@
 import { onMounted, onBeforeUnmount, watch, computed, ref, reactive, nextTick, onUpdated } from 'vue';
 import 'katex/dist/katex.min.css';
 import docInfo from './docInfo.vue';
+import DocReferencesFooter from './DocReferencesFooter.vue';
 import deepThink from './deepThink.vue';
 import AgentStreamDisplay from './AgentStreamDisplay.vue';
 import RagPipelineProgress from './RagPipelineProgress.vue';
