@@ -59,11 +59,16 @@
         </div>
       </div>
 
-      <!-- Wiki 合成模型 (仅当 Wiki 启用时显示) -->
-      <div v-if="wikiEnabled" class="setting-row">
+      <!-- Wiki 合成模型：Wiki 启用时显示；同时当遗留的 wiki_config.synthesis_model_id
+           非空时也显示，让用户能清理孤儿绑定（避免 wiki_enabled 被关掉后还占着模型，
+           导致模型删除检查失败）。当 Wiki 已关闭但仍有合成模型时，提示文案随之切换。 -->
+      <div v-if="wikiEnabled || config.wikiSynthesisModelId" class="setting-row">
         <div class="setting-info">
           <label>{{ $t('knowledgeEditor.wiki.synthesisModelLabel') }}</label>
-          <p class="desc">{{ $t('knowledgeEditor.wiki.synthesisModelTip') }}</p>
+          <p class="desc">
+            <template v-if="wikiEnabled">{{ $t('knowledgeEditor.wiki.synthesisModelTip') }}</template>
+            <template v-else>{{ $t('knowledgeEditor.wiki.synthesisModelOrphanTip') }}</template>
+          </p>
         </div>
         <div class="setting-control">
           <ModelSelector

@@ -4238,6 +4238,7 @@ export default {
       synthesisModelLabel: "Wiki 合成模型",
       synthesisModelPlaceholder: "选择用于 Wiki 生成的 LLM 模型",
       synthesisModelTip: "不设置时将回退使用摘要模型",
+            synthesisModelOrphanTip: "Wiki 已关闭，但仍有遗留的合成模型绑定。请清空以释放被占用的模型，否则该模型在删除检查中会被此知识库命中",
       languageLabel: "Wiki 语言",
       maxPagesLabel: "单次最大页面数",
       maxPagesTip: "每次 Ingest 最多创建/更新的页面数（0 表示不限制）",

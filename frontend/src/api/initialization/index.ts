@@ -156,8 +156,12 @@ export interface KBModelConfigRequest {
         questionCount: number
         customInstructions?: string
     }
-    /** Wiki 合成模型与调优参数。缺省不修改；提供则与现有 WikiConfig 字段级合并。 */
-    wikiConfig?: WikiConfigPayload
+    /** Wiki 合成模型与调优参数。缺省不修改；提供则与现有 WikiConfig 字段级合并。
+        注意：键名必须与后端 KBModelConfigRequest.WikiConfig 的 json tag 一致
+        （后端 tag 是 snake_case 的 wiki_config，gin 严格按 tag 绑定，错位时
+        req.WikiConfig 永远 nil，handler 中的字段级合并不会触发，导致整个
+        wiki 调优子树静默失效。详见 common_pitfalls_experience 记忆）。 */
+    wiki_config?: WikiConfigPayload
 }
 
 export interface WikiConfigPayload {

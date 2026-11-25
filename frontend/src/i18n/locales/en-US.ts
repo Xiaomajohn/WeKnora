@@ -2616,6 +2616,7 @@ export default {
       synthesisModelLabel: 'Wiki Synthesis Model',
       synthesisModelPlaceholder: 'Select the LLM model for Wiki generation',
       synthesisModelTip: 'Falls back to the summary model if not set',
+            synthesisModelOrphanTip: 'Wiki is disabled, but a synthesis model is still bound. Clear it to release the model — otherwise the model-deletion check will flag this knowledge base.',
       languageLabel: 'Wiki Language',
       maxPagesLabel: 'Max Pages Per Ingest',
       maxPagesTip: 'Maximum number of pages to create/update per ingest (0 = no limit)',

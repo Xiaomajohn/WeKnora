@@ -1419,8 +1419,10 @@ const doSubmit = async () => {
 
       // Wiki 合成模型与调优参数（合成模型 ID / 单次最大页面数 / 抽取粒度 /
       // 内容指令 / 抽取指令）。document 类型 KB 才发送，FAQ 类型不涉及。
+      // 发送键名必须为 wiki_config（与后端 KBModelConfigRequest.WikiConfig 的
+      // json tag 一致），使用 wikiConfig 会让 gin 静默丢弃整个子树。
       if (formData.value.type !== 'faq') {
-        config.wikiConfig = {
+        config.wiki_config = {
           synthesis_model_id: formData.value.modelConfig?.wikiSynthesisModelId || '',
           max_pages_per_ingest: formData.value.wikiConfig?.maxPagesPerIngest ?? 0,
           extraction_granularity: formData.value.wikiConfig?.extractionGranularity || 'standard',
