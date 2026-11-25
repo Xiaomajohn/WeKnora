@@ -1,6 +1,4 @@
--- Reverse 000071: cannot reliably reconstruct the original English prompt values,
--- so a downgrade keeps the field cleared (matching the post-upgrade state) and
--- relies on the YAML template fallback. This is intentional — the YAML is the
--- single source of truth for builtin prompts going forward.
-
-DO $$ BEGIN RAISE NOTICE '[Migration 000071] Downgrade: leaving builtin agent system_prompt fields cleared.'; END $$;
+-- Reverse of the no-op placeholder. See the up migration for the rationale:
+-- the original 000071 body already ran against every deployment that reached
+-- version 71, so there is nothing to undo here.
+DO $$ BEGIN RAISE NOTICE '[Migration 000071] Superseded by 000138; no-op.'; END $$;

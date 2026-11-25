@@ -117,7 +117,7 @@ func (s *customAgentService) CreateAgent(ctx context.Context, agent *types.Custo
 }
 
 // localizeBuiltinAgentPrompt fills an empty system_prompt on a builtin-agent
-// row by syncing from the latest YAML template. The migration 000071 clears
+// row by syncing from the latest YAML template. The migration 000138 clears
 // these fields so older DB rows (whose prompts came from 000006's copy of
 // tenant-level English defaults) can be transparently refreshed with the
 // localized Chinese templates now shipping in builtin_agents.yaml /
@@ -170,7 +170,7 @@ func (s *customAgentService) GetAgentByID(ctx context.Context, id string) (*type
 			// Found in database, return with customized config
 			agent.EnsureDefaults()
 			// If a builtin row exists but its system_prompt is empty (e.g.
-			// left blank by migration 000071), fill it from the latest YAML
+			// left blank by migration 000138), fill it from the latest YAML
 			// template so users see the localized prompt immediately.
 			if agent.Config.SystemPrompt == "" {
 				if def := types.GetBuiltinAgentWithContext(ctx, id, tenantID); def != nil {
